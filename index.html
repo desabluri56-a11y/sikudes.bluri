@@ -1,0 +1,2389 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  LayoutDashboard,
+  Wallet,
+  ArrowUpRight,
+  ArrowDownLeft,
+  PieChart,
+  FileText,
+  Building2,
+  Users,
+  Settings,
+  Bell,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  ShieldCheck,
+  Search,
+  Filter,
+  Plus,
+  Printer,
+  Download,
+  Upload,
+  Sun,
+  Moon,
+  TrendingUp,
+  TrendingDown,
+  Eye,
+  Edit,
+  Trash2,
+  ArrowRightLeft,
+  Receipt,
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  AlertCircle,
+  LogOut,
+  Landmark,
+  BookOpen,
+  History,
+  Lock,
+  RefreshCw,
+  UserCheck,
+  LogIn,
+  BarChart3,
+  Activity,
+  LineChart
+} from 'lucide-react';
+
+// Import Firebase SDK
+import { initializeApp } from "firebase/app";
+import { getAnalytics } from "firebase/analytics";
+import { getDatabase, ref, set, push, onValue, update } from "firebase/database";
+
+// Konfigurasi Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyBnEFrxm29iURSkKGwEU-ba0pR3Ov7VwPM",
+  authDomain: "sikudes-bluri.firebaseapp.com",
+  databaseURL: "https://sikudes-bluri-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "sikudes-bluri",
+  storageBucket: "sikudes-bluri.firebasestorage.app",
+  messagingSenderId: "14918344104",
+  appId: "1:14918344104:web:4b394e4d473934d814519d",
+  measurementId: "G-61STF2WPZL"
+};
+
+// Inisialisasi Firebase
+const app = initializeApp(firebaseConfig);
+const analytics = getAnalytics(app);
+const db = getDatabase(app);
+
+// Data Role & Kredensial Khusus
+const INITIAL_ROLES = [
+  { 
+    id: 'kaur_keuangan', 
+    name: 'Kaur Keuangan / Bendahara',
+    email: 'bendahara@bluri.desa.id',
+    password: '22',
+    info: 'Pengelola Pelaksana: Input Transaksi Masuk/Keluar, Pemindahbukuan Kas, Import CSV'
+  },
+  { 
+    id: 'admin', 
+    name: 'Administrator Sistem',
+    email: 'admin@bluri.desa.id',
+    password: '4dm1n',
+    info: 'Akses Penuh: Kelola Pengguna, Reset Database, Konfigurasi Cloud, Audit Trail Log'
+  },
+  { 
+    id: 'kades', 
+    name: 'Kepala Desa',
+    email: 'kades@bluri.desa.id',
+    password: 'KadesBluri#99',
+    info: 'Otorisator Utama: Persetujuan APBDes, Pengesahan Belanja, Monitoring Real-time'
+  },
+  { 
+    id: 'sekdes', 
+    name: 'Sekretaris Desa',
+    email: 'sekdes@bluri.desa.id',
+    password: 'Sekdes2026Password!',
+    info: 'Verifikator Administrasi: Penyusunan RAK/DPA, Pengawasan Berkas Transaksi'
+  },
+  { 
+    id: 'kasi', 
+    name: 'Kaur / Kasi Pelaksana',
+    email: 'kasi@bluri.desa.id',
+    password: 'Kasipelaksana#123',
+    info: 'Pelaksana Kegiatan: Pengajuan Transaksi Belanja Bidang & Program Desa'
+  },
+  { 
+    id: 'auditor', 
+    name: 'Auditor / Pengawas Inspektorat',
+    email: 'auditor@lamongankab.go.id',
+    password: 'Inspektorat2026Audit',
+    info: 'Pengawas Eksternal: Mode Read-Only untuk Audit BKU, Laporan & History Log'
+  }
+];
+
+const INITIAL_USERS = [
+  { id: 1, name: 'Zainal Abidin, S.Kom', role: 'kaur_keuangan', email: 'bendahara@bluri.desa.id', status: 'Aktif' },
+  { id: 2, name: 'Heru Sukadri, SH', role: 'kades', email: 'kades@bluri.desa.id', status: 'Aktif' },
+  { id: 3, name: 'Khoirul Huda, S,Pd', role: 'sekdes', email: 'sekdes@bluri.desa.id', status: 'Aktif' },
+  { id: 4, name: 'Abdul Hakim, SE', role: 'kasi', email: 'kasi@bluri.desa.id', status: 'Aktif' },
+  { id: 5, name: 'Tim Inspektorat', role: 'auditor', email: 'auditor@lamongankab.go.id', status: 'Aktif' }
+];
+
+// Helper Formatter
+const formatIDR = (val: any) => {
+  if (val === undefined || val === null || isNaN(val)) return 'Rp0';
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    maximumFractionDigits: 0
+  }).format(val);
+};
+
+// Helper Urutkan Tanggal Kronologis (Januari -> Desember, Tanggal 1 -> 31)
+const parseDateToNumber = (dateStr: string) => {
+  if (!dateStr) return 0;
+  // Mendukung format YYYY-MM-DD maupun DD/MM/YYYY
+  if (dateStr.includes('-')) {
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      // YYYY-MM-DD
+      return parseInt(`${parts[0]}${parts[1].padStart(2, '0')}${parts[2].padStart(2, '0')}`, 10);
+    }
+  } else if (dateStr.includes('/')) {
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      // DD/MM/YYYY
+      return parseInt(`${parts[2]}${parts[1].padStart(2, '0')}${parts[0].padStart(2, '0')}`, 10);
+    }
+  }
+  return 0;
+};
+
+const sortTransactionsChronologically = (trxList: any[]) => {
+  return [...trxList].sort((a, b) => {
+    const numA = parseDateToNumber(a.date);
+    const numB = parseDateToNumber(b.date);
+    if (numA !== numB) return numA - numB;
+    // Jika tanggal sama, dahulukan Pendapatan
+    if (a.type === 'Pendapatan' && b.type !== 'Pendapatan') return -1;
+    if (a.type !== 'Pendapatan' && b.type === 'Pendapatan') return 1;
+    return 0;
+  });
+};
+
+export default function App() {
+  const [theme, setTheme] = useState('light');
+  const [activeMenu, setActiveMenu] = useState('dashboard');
+  
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [selectedRoleId, setSelectedRoleId] = useState('kaur_keuangan');
+  const [loginEmail, setLoginEmail] = useState('bendahara@bluri.desa.id');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStep, setUploadStep] = useState(0);
+  const [uploadStatusText, setUploadStatusText] = useState('');
+  const [uploadProgressPct, setUploadProgressPct] = useState(0);
+  
+  const [villageProfile, setVillageProfile] = useState({
+    name: 'Desa Bluri',
+    district: 'Kecamatan Solokuro',
+    regency: 'Kabupaten Lamongan',
+    province: 'Jawa Timur',
+    headOfVillage: 'Heru Sukadri, SH',
+    secretary: 'Khoirul Huda, S.Pd',
+    treasurer: 'Zainal Abidin, S.Kom',
+    fiscalYear: '2026',
+    logo: '🏛️'
+  });
+
+  const [accounts, setAccounts] = useState([
+    { id: '101', name: 'Kas Bendahara Desa', type: 'Tunai', accountNumber: 'KAS-01', balance: 0 },
+    { id: '102', name: 'Bank Jatim - Rekening Desa', type: 'Bank', accountNumber: '014-29381-001', balance: 0 },
+    { id: '103', name: 'Bank BRI - Operasional Desa', type: 'Bank', accountNumber: '3201-01-00045-53-1', balance: 0 }
+  ]);
+
+  const [budgetItems, setBudgetItems] = useState([
+    { id: '4.1', code: '4.1', category: 'Pendapatan', name: 'Pendapatan Asli Desa (PAD)', budget: 100000000, realization: 0 },
+    { id: '4.2', code: '4.2', category: 'Pendapatan', name: 'Dana Desa (DD)', budget: 800000000, realization: 0 },
+    { id: '4.3', code: '4.3', category: 'Pendapatan', name: 'Alokasi Dana Desa (ADD)', budget: 400000000, realization: 0 },
+    { id: '5.1', code: '5.1', category: 'Belanja', name: 'Bidang Penyelenggaraan Pemerintahan', budget: 500000000, realization: 0 },
+    { id: '5.2', code: '5.2', category: 'Belanja', name: 'Bidang Pembangunan Desa', budget: 600000000, realization: 0 }
+  ]);
+
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
+
+  const [selectedYear, setSelectedYear] = useState('2026');
+  const [notificationMsg, setNotificationMsg] = useState<string | null>(null);
+
+  // State Khusus Menu Laporan (Reports)
+  const [reportType, setReportType] = useState('bku'); // 'bku' | 'category' | 'activity'
+  const [reportCategoryFilter, setReportCategoryFilter] = useState('Semua');
+  const [reportActivityFilter, setReportActivityFilter] = useState('Semua');
+
+  const [isModalTrxOpen, setIsModalTrxOpen] = useState(false);
+  const [trxType, setTrxType] = useState('Pendapatan');
+  const [editingTrx, setEditingTrx] = useState<any>(null);
+  const [formData, setFormData] = useState({
+    category: '',
+    customCategory: '',
+    activity: '',
+    customActivity: '',
+    description: '',
+    accountId: '101',
+    amount: '',
+    recipient: '',
+    taxType: 'Tidak Ada',
+    taxPercent: 0
+  });
+
+  const [isModalMasterOpen, setIsModalMasterOpen] = useState(false);
+  const [masterForm, setMasterForm] = useState({ ...villageProfile });
+
+  const [isModalBudgetOpen, setIsModalBudgetOpen] = useState(false);
+  const [editingBudget, setEditingBudget] = useState<any>(null);
+  const [budgetForm, setBudgetForm] = useState({ budget: '' });
+
+  const [isModalAccountOpen, setIsModalAccountOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<any>(null);
+  const [accountForm, setAccountForm] = useState({ name: '', balance: '' });
+
+  const handleRoleChange = (roleId: string) => {
+    setSelectedRoleId(roleId);
+    const selectedRoleObj = INITIAL_ROLES.find(r => r.id === roleId);
+    if (selectedRoleObj) {
+      setLoginEmail(selectedRoleObj.email);
+    }
+  };
+
+  useEffect(() => {
+    const trxRef = ref(db, 'transactions');
+    onValue(trxRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const loadedTrx = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
+        // Urutkan kronologis dari awal (Januari tgl 1) ke akhir
+        setTransactions(sortTransactionsChronologically(loadedTrx));
+      } else {
+        setTransactions([]);
+      }
+    });
+
+    const accRef = ref(db, 'accounts');
+    onValue(accRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) setAccounts(data);
+    });
+
+    const budgetRef = ref(db, 'budgetItems');
+    onValue(budgetRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) setBudgetItems(data);
+    });
+
+    const auditRef = ref(db, 'auditLogs');
+    onValue(auditRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const loadedAudit = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
+        setAuditLogs(loadedAudit.reverse());
+      } else {
+        setAuditLogs([]);
+      }
+    });
+  }, []);
+
+  const showToast = (msg: string) => {
+    setNotificationMsg(msg);
+    setTimeout(() => setNotificationMsg(null), 4000);
+  };
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  };
+
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+
+    const targetRole = INITIAL_ROLES.find(r => r.id === selectedRoleId);
+    if (!targetRole) {
+      setLoginError('Role akses tidak valid.');
+      return;
+    }
+
+    if (loginPassword !== targetRole.password) {
+      setLoginError('Kata sandi salah untuk role/otoritas yang dipilih.');
+      return;
+    }
+
+    const matchedUser = INITIAL_USERS.find(u => u.role === selectedRoleId);
+    const userSession = {
+      name: matchedUser ? matchedUser.name : 'Pengguna SIKUDES',
+      email: targetRole.email,
+      role: selectedRoleId,
+      roleName: targetRole.name
+    };
+
+    setCurrentUser(userSession);
+    setIsAuthenticated(true);
+    setLoginPassword('');
+    showToast(`Selamat datang kembali, ${userSession.name}!`);
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setCurrentUser(null);
+    setLoginPassword('');
+    showToast('Anda telah keluar dari sistem.');
+  };
+
+  const userPermissions = useMemo(() => {
+    if (!currentUser) return { canEdit: false, canImport: false, canReset: false, isAuditor: true };
+    const role = currentUser.role;
+    return {
+      canEdit: ['admin', 'kaur_keuangan', 'kades', 'sekdes'].includes(role),
+      canImport: ['admin', 'kaur_keuangan'].includes(role),
+      canReset: ['admin', 'kaur_keuangan'].includes(role),
+      isAuditor: role === 'auditor'
+    };
+  }, [currentUser]);
+
+  const availableActivities = useMemo(() => {
+    const setAct = new Set<string>();
+    setAct.add('Pendapatan Asli Desa (PAD)');
+    setAct.add('Alokasi Dana Desa (ADD)');
+    setAct.add('Dana Desa (DD)');
+    setAct.add('Operasional PAUD');
+    setAct.add('Operasional POSYANDU');
+    setAct.add('Pembangunan Infrastruktur Desa');
+    setAct.add('Pemberdayaan Masyarakat');
+    
+    transactions.forEach(t => {
+      if (t.activity && t.activity !== '-' && t.activity.trim() !== '') {
+        setAct.add(t.activity);
+      }
+      if (t.category && t.category.trim() !== '') {
+        setAct.add(t.category);
+      }
+    });
+    return Array.from(setAct);
+  }, [transactions]);
+
+  const getActivityBalance = (activityName: string) => {
+    if (!activityName || activityName === '-') return 0;
+    const matchedTrx = transactions.filter(t => 
+      (t.activity || '').toLowerCase() === activityName.toLowerCase() || 
+      (t.category || '').toLowerCase() === activityName.toLowerCase()
+    );
+    
+    const totalIn = matchedTrx
+      .filter(t => (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in')
+      .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+      
+    const totalOut = matchedTrx
+      .filter(t => (t.type || '').toLowerCase().includes('pengeluaran') || (t.type || '').toLowerCase().includes('belanja') || (t.type || '').toLowerCase() === 'out')
+      .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+      
+    return totalIn - totalOut;
+  };
+
+  const financialSummary = useMemo(() => {
+    const totalBudgetRevenue = budgetItems.filter(i => i.category === 'Pendapatan').reduce((acc, curr) => acc + (curr.budget || 0), 0);
+    const totalBudgetExpenditure = budgetItems.filter(i => i.category === 'Belanja').reduce((acc, curr) => acc + (curr.budget || 0), 0);
+    
+    const approvedRevenue = transactions
+      .filter(t => {
+        const typeStr = (t.type || '').toLowerCase();
+        return typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+      })
+      .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+
+    const approvedExpenditure = transactions
+      .filter(t => {
+        const typeStr = (t.type || '').toLowerCase();
+        return typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
+      })
+      .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+    
+    const totalCashBalance = approvedRevenue - approvedExpenditure;
+    const absorptionRate = totalBudgetExpenditure > 0 ? ((approvedExpenditure / totalBudgetExpenditure) * 100).toFixed(1) : '0';
+
+    return { totalBudgetRevenue, totalBudgetExpenditure, approvedRevenue, approvedExpenditure, totalCashBalance, absorptionRate };
+  }, [budgetItems, transactions]);
+
+  const monthlyChartData = useMemo(() => {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    const revByMonth = new Array(12).fill(0);
+    const expByMonth = new Array(12).fill(0);
+
+    transactions.forEach(t => {
+      if (!t.date) return;
+      let monthIndex = -1;
+      if (t.date.includes('-')) {
+        const parts = t.date.split('-');
+        if (parts.length >= 2) {
+          monthIndex = parseInt(parts[1], 10) - 1;
+        }
+      } else if (t.date.includes('/')) {
+        const parts = t.date.split('/');
+        if (parts.length >= 2) {
+          monthIndex = parseInt(parts[1], 10) - 1;
+        }
+      }
+
+      if (monthIndex >= 0 && monthIndex < 12) {
+        const amt = Number(t.amount || 0);
+        const typeStr = (t.type || '').toLowerCase();
+        const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+        if (isInc) {
+          revByMonth[monthIndex] += amt;
+        } else {
+          expByMonth[monthIndex] += amt;
+        }
+      }
+    });
+
+    return months.map((m, idx) => ({
+      month: m,
+      revenue: revByMonth[idx],
+      expense: expByMonth[idx]
+    }));
+  }, [transactions]);
+
+  const activityBreakdown = useMemo(() => {
+    const map = new Map<string, { totalIn: number; totalOut: number; count: number }>();
+    transactions.forEach(t => {
+      const act = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+      const amt = Number(t.amount || 0);
+      const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+
+      if (!map.has(act)) {
+        map.set(act, { totalIn: 0, totalOut: 0, count: 0 });
+      }
+      const item = map.get(act)!;
+      if (isInc) item.totalIn += amt;
+      else item.totalOut += amt;
+      item.count += 1;
+    });
+
+    return Array.from(map.entries()).map(([name, stat]) => ({
+      name,
+      ...stat,
+      net: stat.totalIn - stat.totalOut
+    })).sort((a, b) => b.totalOut - a.totalOut);
+  }, [transactions]);
+
+  const categoryBreakdown = useMemo(() => {
+    const map = new Map<string, { totalIn: number; totalOut: number }>();
+    transactions.forEach(t => {
+      const cat = t.category || 'Umum';
+      const amt = Number(t.amount || 0);
+      const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+
+      if (!map.has(cat)) {
+        map.set(cat, { totalIn: 0, totalOut: 0 });
+      }
+      const item = map.get(cat)!;
+      if (isInc) item.totalIn += amt;
+      else item.totalOut += amt;
+    });
+
+    return Array.from(map.entries()).map(([name, stat]) => ({
+      name,
+      ...stat
+    })).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
+  }, [transactions]);
+
+  // Fungsi Cetak Laporan (Print / PDF via Browser Window)
+  const handlePrintReport = () => {
+    window.print();
+  };
+
+  // Fungsi Download Laporan ke Format CSV
+  const handleDownloadReportCSV = () => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    
+    if (reportType === 'bku') {
+      csvContent += "Tanggal,Jenis,Kategori,Kegiatan,Uraian,Nominal (Rp)\r\n";
+      transactions.forEach(t => {
+        const row = [t.date, t.type, `"${t.category}"`, `"${t.activity || '-'}"`, `"${t.description}"`, t.amount];
+        csvContent += row.join(",") + "\r\n";
+      });
+    } else if (reportType === 'category') {
+      csvContent += "Tanggal,Kategori APBDes,Uraian Transaksi,Jenis,Nominal (Rp)\r\n";
+      transactions.forEach(t => {
+        if (reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter) {
+          const row = [t.date, `"${t.category}"`, `"${t.description}"`, t.type, t.amount];
+          csvContent += row.join(",") + "\r\n";
+        }
+      });
+    } else if (reportType === 'activity') {
+      csvContent += "Tanggal,Jenis Kegiatan,Uraian Transaksi,Kategori,Penerimaan (Rp),Pengeluaran (Rp),Saldo (Rp)\r\n";
+      let runningBal = 0;
+      transactions.forEach(t => {
+        const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+        if (reportActivityFilter === 'Semua' || actName === reportActivityFilter) {
+          const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+          runningBal += isInc ? Number(t.amount || 0) : -Number(t.amount || 0);
+          const row = [t.date, `"${actName}"`, `"${t.description}"`, `"${t.category}"`, isInc ? t.amount : 0, !isInc ? t.amount : 0, runningBal];
+          csvContent += row.join(",") + "\r\n";
+        }
+      });
+    }
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Laporan_Detail_${reportType}_${villageProfile.name.replace(/\s+/g, '_')}_2026.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast('📥 Berhasil mendownload file laporan detail CSV!');
+  };
+
+  const handleResetTransactions = async () => {
+    if (!userPermissions.canReset) {
+      showToast('⚠️ Akses Ditolak! Hanya Administrator yang dapat mereset database.');
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadStep(1);
+    setUploadStatusText('Menghapus seluruh data transaksi di Cloud...');
+    setUploadProgressPct(30);
+
+    try {
+      await set(ref(db, 'transactions'), null);
+      await set(ref(db, 'auditLogs'), null);
+
+      setUploadStep(3);
+      setUploadStatusText('Mereset saldo rekening ke Rp 0...');
+      setUploadProgressPct(70);
+
+      const resetAccs = accounts.map(acc => ({ ...acc, balance: 0 }));
+      await set(ref(db, 'accounts'), resetAccs);
+
+      setUploadStep(4);
+      setUploadStatusText('Reset database berhasil!');
+      setUploadProgressPct(100);
+
+      setTimeout(() => {
+        setIsUploading(false);
+        showToast('🗑️ Seluruh data transaksi di Cloud berhasil direset!');
+      }, 1000);
+    } catch (err) {
+      console.error(err);
+      setIsUploading(false);
+      showToast('❌ Gagal mereset data ke cloud.');
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!userPermissions.canImport) {
+      showToast('⚠️ Akses Ditolak! Anda tidak memiliki izin untuk mengimport data.');
+      return;
+    }
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    setUploadStep(1);
+    setUploadStatusText('Membaca dan memindai file CSV...');
+    setUploadProgressPct(15);
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const text = evt.target?.result as string;
+        if (!text) {
+          showToast('⚠️ File kosong atau tidak dapat dibaca!');
+          setIsUploading(false);
+          return;
+        }
+
+        setUploadStep(2);
+        setUploadStatusText('Menguraikan baris transaksi & teks...');
+        setUploadProgressPct(35);
+
+        const rows = [];
+        let currentRow = [];
+        let currentEntry = '';
+        let insideQuote = false;
+
+        for (let i = 0; i < text.length; i++) {
+          const char = text[i];
+          const nextChar = text[i + 1];
+
+          if (char === '"') {
+            if (insideQuote && nextChar === '"') {
+              currentEntry += '"';
+              i++;
+            } else {
+              insideQuote = !insideQuote;
+            }
+          } else if ((char === ',' || char === ';') && !insideQuote) {
+            currentRow.push(currentEntry.trim().replace(/^["']|["']$/g, ''));
+            currentEntry = '';
+          } else if ((char === '\r' || char === '\n') && !insideQuote) {
+            if (char === '\r' && nextChar === '\n') { i++; }
+            currentRow.push(currentEntry.trim().replace(/^["']|["']$/g, ''));
+            if (currentRow.length > 1 || currentRow[0] !== '') {
+              rows.push(currentRow);
+            }
+            currentRow = [];
+            currentEntry = '';
+          } else {
+            currentEntry += char;
+          }
+        }
+        if (currentEntry !== '' || currentRow.length > 0) {
+          currentRow.push(currentEntry.trim().replace(/^["']|["']$/g, ''));
+          rows.push(currentRow);
+        }
+
+        if (rows.length < 2) {
+          showToast('⚠️ Format baris file CSV tidak valid!');
+          setIsUploading(false);
+          return;
+        }
+
+        setUploadStep(3);
+        setUploadStatusText('Memvalidasi nominal & mengelompokkan kegiatan...');
+        setUploadProgressPct(65);
+
+        let importedCount = 0;
+        let totalRevenue = 0;
+        let totalExpenditure = 0;
+        
+        const updates: Record<string, any> = {};
+        const transactionsRef = ref(db, 'transactions');
+
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length < 5) continue;
+
+          const dateVal = row[0] || new Date().toISOString().split('T')[0];
+          const categoryVal = row[1] || 'Pendapatan Asli Desa (PAD)';
+          const activityVal = row[2] || 'Umum';
+          const ketVal = row[3] || 'Transaksi Import';
+
+          const lastColVal = String(row[row.length - 1] || row[5] || '').trim().toUpperCase();
+          
+          let isIncome = true;
+          if (lastColVal === 'OUT' || lastColVal.includes('KELUAR') || lastColVal.includes('KLR')) {
+            isIncome = false;
+          } else if (lastColVal === 'IN' || lastColVal.includes('MASUK') || lastColVal.includes('MSK')) {
+            isIncome = true;
+          } else {
+            isIncome = !lastColVal.includes('OUT');
+          }
+
+          let amount = 0;
+          const rawAmountStr = String(row[4] || row[3] || '').replace(/[^0-9]/g, '');
+          amount = Number(rawAmountStr) || 0;
+
+          if (amount <= 0) continue;
+
+          const newTrxRef = push(transactionsRef);
+          const newTrxId = `TRX-IMP-${Date.now().toString().slice(-4)}-${i}`;
+
+          const formattedTrx = {
+            id: newTrxId,
+            date: dateVal,
+            type: isIncome ? 'Pendapatan' : 'Pengeluaran',
+            category: categoryVal,
+            activity: activityVal,
+            description: ketVal,
+            accountId: '101',
+            accountName: 'Kas Bendahara Desa',
+            amount: amount,
+            tax: 0,
+            netAmount: amount,
+            recipient: isIncome ? 'Kas Desa' : 'Pihak Terkait',
+            status: 'Disetujui',
+            approvedBy: currentUser ? currentUser.name : 'Sistem',
+            approvedAt: new Date().toISOString().split('T')[0]
+          };
+
+          updates[`transactions/${newTrxRef.key}`] = formattedTrx;
+
+          if (isIncome) totalRevenue += amount;
+          else totalExpenditure += amount;
+
+          importedCount++;
+        }
+
+        if (importedCount === 0) {
+          showToast('⚠️ Tidak ada baris valid yang terbaca.');
+          setIsUploading(false);
+          return;
+        }
+
+        setUploadStep(4);
+        setUploadStatusText('Menyimpan data massal ke Firebase Cloud Database...');
+        setUploadProgressPct(85);
+
+        await update(ref(db), updates);
+
+        const updatedAccs = accounts.map(acc => {
+          if (acc.id === '101') {
+            const netChange = totalRevenue - totalExpenditure;
+            return { ...acc, balance: (acc.balance || 0) + netChange };
+          }
+          return acc;
+        });
+        await set(ref(db, 'accounts'), updatedAccs);
+
+        const auditRef = push(ref(db, 'auditLogs'));
+        await set(auditRef, {
+          timestamp: new Date().toLocaleString('id-ID'),
+          user: currentUser ? currentUser.name : 'User',
+          action: `Berhasil mengimport ${importedCount} data transaksi ke Cloud`,
+          module: 'Import Data'
+        });
+
+        setUploadStep(5);
+        setUploadStatusText('Selesai! Data berhasil disinkronkan.');
+        setUploadProgressPct(100);
+
+        setTimeout(() => {
+          setIsUploading(false);
+          showToast(`🎉 Sukses mengimport ${importedCount} data transaksi ke Cloud!`);
+        }, 1200);
+
+      } catch (err) {
+        console.error('Error saat import:', err);
+        setIsUploading(false);
+        showToast('❌ Gagal mengimport data ke cloud.');
+      }
+    };
+
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleSaveTransaction = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userPermissions.canEdit) {
+      showToast('⚠️ Akses Ditolak! Peran Anda tidak diizinkan mengubah transaksi.');
+      return;
+    }
+    if (!formData.amount || Number(formData.amount) <= 0) {
+      showToast('⚠️ Nominal transaksi tidak valid!');
+      return;
+    }
+
+    const finalCategory = formData.category === 'Lainnya' ? formData.customCategory.trim() : formData.category;
+    if (!finalCategory) {
+      showToast('⚠️ Harap isi/pilih Kategori APBDes!');
+      return;
+    }
+
+    const finalActivity = formData.activity === 'Lainnya' ? formData.customActivity.trim() : (formData.activity || '-');
+    const grossAmount = Number(formData.amount);
+    const selectedAccount = accounts.find(a => a.id === formData.accountId);
+
+    if (editingTrx) {
+      const updatedTrxData = {
+        ...editingTrx,
+        type: trxType,
+        category: finalCategory,
+        activity: finalActivity,
+        description: formData.description,
+        accountId: formData.accountId,
+        accountName: selectedAccount ? selectedAccount.name : 'Rekening Kas',
+        amount: grossAmount,
+        netAmount: grossAmount
+      };
+
+      const trxRef = ref(db, `transactions/${editingTrx.idKey}`);
+      set(trxRef, updatedTrxData);
+
+      const auditRef = push(ref(db, 'auditLogs'));
+      set(auditRef, {
+        timestamp: new Date().toLocaleString('id-ID'),
+        user: currentUser.name,
+        action: `Mengedit transaksi ${editingTrx.id} menjadi ${formatIDR(grossAmount)}`,
+        module: trxType
+      });
+
+      showToast(`✅ Transaksi ${editingTrx.id} berhasil diperbarui!`);
+    } else {
+      const newTrxId = `TRX-${selectedYear}-${Date.now().toString().slice(-4)}`;
+      const newTransaction = {
+        id: newTrxId,
+        date: new Date().toISOString().split('T')[0],
+        type: trxType,
+        category: finalCategory,
+        activity: finalActivity,
+        description: formData.description,
+        accountId: formData.accountId,
+        accountName: selectedAccount ? selectedAccount.name : 'Rekening Kas',
+        amount: grossAmount,
+        tax: 0,
+        netAmount: grossAmount,
+        recipient: formData.recipient || 'Pihak Terkait',
+        status: 'Disetujui',
+        approvedBy: currentUser.name,
+        approvedAt: new Date().toISOString().split('T')[0]
+      };
+
+      const trxRef = ref(db, 'transactions');
+      const newTrxRef = push(trxRef);
+      set(newTrxRef, newTransaction);
+
+      const updatedAccs = accounts.map(acc => {
+        if (acc.id === formData.accountId) {
+          const change = trxType === 'Pendapatan' ? grossAmount : -grossAmount;
+          return { ...acc, balance: (acc.balance || 0) + change };
+        }
+        return acc;
+      });
+      set(ref(db, 'accounts'), updatedAccs);
+
+      const auditRef = push(ref(db, 'auditLogs'));
+      const newAuditRef = push(auditRef);
+      set(newAuditRef, {
+        timestamp: new Date().toLocaleString('id-ID'),
+        user: currentUser.name,
+        action: `Membuat transaksi ${trxType} ${newTrxId} sebesar ${formatIDR(grossAmount)}`,
+        module: trxType
+      });
+
+      showToast(`✅ Transaksi ${newTrxId} berhasil disimpan ke Cloud`);
+    }
+
+    setIsModalTrxOpen(false);
+    setEditingTrx(null);
+    setFormData({ 
+      category: '', 
+      customCategory: '', 
+      activity: '', 
+      customActivity: '', 
+      description: '', 
+      accountId: '101', 
+      amount: '', 
+      recipient: '', 
+      taxType: 'Tidak Ada', 
+      taxPercent: 0 
+    });
+  };
+
+  const openEditTransaction = (t: any) => {
+    if (!userPermissions.canEdit) {
+      showToast('⚠️ Akses Ditolak! Anda hanya memiliki izin membaca data.');
+      return;
+    }
+    setEditingTrx(t);
+    setTrxType(t.type);
+    setFormData({
+      category: t.category,
+      customCategory: '',
+      activity: t.activity || '',
+      customActivity: '',
+      description: t.description,
+      accountId: t.accountId || '101',
+      amount: t.amount,
+      recipient: t.recipient || '',
+      taxType: 'Tidak Ada',
+      taxPercent: 0
+    });
+    setIsModalTrxOpen(true);
+  };
+
+  const handleSaveMaster = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userPermissions.canEdit) {
+      showToast('⚠️ Akses Ditolak!');
+      return;
+    }
+    setVillageProfile(masterForm);
+    setIsModalMasterOpen(false);
+    showToast('🏛️ Data Master Desa berhasil diperbarui!');
+  };
+
+  const handleSaveBudget = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userPermissions.canEdit) {
+      showToast('⚠️ Akses Ditolak!');
+      return;
+    }
+    if (!editingBudget) return;
+    const updated = budgetItems.map(item => item.id === editingBudget.id ? { ...item, budget: Number(budgetForm.budget) } : item);
+    setBudgetItems(updated);
+    set(ref(db, 'budgetItems'), updated);
+    setIsModalBudgetOpen(false);
+    setEditingBudget(null);
+    showToast('📊 Pagu Anggaran berhasil diperbarui!');
+  };
+
+  const handleSaveAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userPermissions.canEdit) {
+      showToast('⚠️ Akses Ditolak!');
+      return;
+    }
+    if (!editingAccount) return;
+    const updated = accounts.map(acc => acc.id === editingAccount.id ? { ...acc, name: accountForm.name, balance: Number(accountForm.balance) } : acc);
+    setAccounts(updated);
+    set(ref(db, 'accounts'), updated);
+    setIsModalAccountOpen(false);
+    setEditingAccount(null);
+    showToast('🏦 Saldo/Nama Rekening berhasil diperbarui!');
+  };
+
+  const currentRoleInfo = useMemo(() => {
+    return INITIAL_ROLES.find(r => r.id === selectedRoleId)?.info || '';
+  }, [selectedRoleId]);
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#040812] via-[#091322] to-[#020710] flex items-center justify-center p-4 font-sans text-slate-100 selection:bg-emerald-500 selection:text-white relative overflow-hidden">
+        {/* Efek Cahaya Kristal Latar Belakang */}
+        <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-emerald-500/20 rounded-full blur-[150px] pointer-events-none"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-teal-500/15 rounded-full blur-[150px] pointer-events-none"></div>
+
+        <div className="w-full max-w-5xl bg-white/[0.03] backdrop-blur-[40px] rounded-3xl overflow-hidden border border-white/15 shadow-[0_16px_48px_0_rgba(0,0,0,0.6)] flex flex-col md:flex-row min-h-[520px] relative z-10">
+          <div className="w-full md:w-5/12 bg-emerald-950/20 backdrop-blur-[40px] p-8 flex flex-col justify-between relative overflow-hidden border-r border-white/15">
+            <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-emerald-400/15 to-transparent pointer-events-none"></div>
+            <div className="space-y-6 relative z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-3xl border border-white/25 flex items-center justify-center text-white text-2xl shadow-inner">
+                  🏛️
+                </div>
+                <div>
+                  <h1 className="text-xl font-black tracking-tight text-white leading-tight">SIKUDES CLOUD</h1>
+                  <p className="text-xs text-emerald-200 font-medium">Sistem Keuangan Desa Digital</p>
+                </div>
+              </div>
+
+              <div className="bg-white/[0.04] backdrop-blur-3xl rounded-2xl p-4 border border-white/15 space-y-1 shadow-inner">
+                <p className="text-[10px] font-bold tracking-wider text-emerald-200 uppercase">Pemerintahan Desa</p>
+                <h2 className="text-lg font-extrabold text-white">{villageProfile.name}</h2>
+                <p className="text-xs text-emerald-100">{villageProfile.district}, {villageProfile.regency}</p>
+                <p className="text-xs text-emerald-200/80">{villageProfile.province}</p>
+              </div>
+
+              <div className="bg-emerald-900/10 backdrop-blur-3xl rounded-2xl p-4 border border-emerald-400/25 space-y-1.5">
+                <div className="flex items-center gap-2 text-emerald-300 font-bold text-xs">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>Crystal Clear Security</span>
+                </div>
+                <p className="text-[11px] text-emerald-100/70 leading-relaxed">
+                  Sistem transparan tembus pandang terintegrasi langsung dengan Firebase Realtime Database untuk APBDes T.A. 2026.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-6 flex justify-between items-center text-[11px] text-emerald-200/60 font-medium relative z-10 border-t border-white/10">
+              <span>Versi 4.2.0 • Ultra Clear</span>
+              <span>Kabupaten Lamongan</span>
+            </div>
+          </div>
+
+          <div className="w-full md:w-7/12 p-8 md:p-10 flex flex-col justify-center bg-white/[0.02] backdrop-blur-[40px]">
+            <div className="max-w-md w-full mx-auto space-y-6">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-xl">
+                  <LogIn className="w-5 h-5" />
+                  <h2>Masuk ke Sistem</h2>
+                </div>
+                <p className="text-xs text-slate-400">Pilih role hak akses dan masukkan kredensial sandi Anda.</p>
+              </div>
+
+              <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs">
+                {loginError && (
+                  <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{loginError}</span>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1.5">Otoritas / Hak Akses (Role)</label>
+                  <div className="relative">
+                    <select
+                      value={selectedRoleId}
+                      onChange={(e) => handleRoleChange(e.target.value)}
+                      className="w-full bg-white/[0.04] border border-white/20 rounded-xl px-3.5 py-3 text-white font-semibold focus:outline-none focus:border-emerald-500 transition appearance-none cursor-pointer pr-10 backdrop-blur-3xl shadow-inner"
+                    >
+                      {INITIAL_ROLES.map(role => (
+                        <option key={role.id} value={role.id} className="bg-slate-900 text-slate-100">
+                          {role.name}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
+                  </div>
+                  {currentRoleInfo && (
+                    <p className="text-[11px] text-emerald-400/90 mt-1.5 flex items-start gap-1 font-medium">
+                      <span className="font-bold">ℹ️</span> {currentRoleInfo}
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1.5">Email Pengguna</label>
+                  <input
+                    type="email"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    className="w-full bg-white/[0.04] border border-white/20 rounded-xl px-3.5 py-3 text-white font-medium focus:outline-none focus:border-emerald-500 transition placeholder-slate-500 backdrop-blur-3xl shadow-inner"
+                    placeholder="nama@bluri.desa.id"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1.5">Kata Sandi (Password Unik)</label>
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="w-full bg-white/[0.04] border border-white/20 rounded-xl px-3.5 py-3 text-white focus:outline-none focus:border-emerald-500 transition font-mono placeholder-slate-500 backdrop-blur-3xl shadow-inner"
+                    placeholder="Masukkan sandi khusus role ini..."
+                    required
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1 italic">
+                    *Setiap role memiliki sandi verifikasi yang berbeda demi keamanan sistem.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 transition transform active:scale-[0.99] text-sm mt-2 border border-emerald-400/40 backdrop-blur-xl"
+                >
+                  <ShieldCheck className="w-4 h-4" /> Masuk SIKUDES Cloud
+                </button>
+              </form>
+
+              <div className="pt-4 border-t border-white/10 text-center text-[11px] text-slate-400">
+                Lupa sandi atau pendaftaran akun baru? Hubungi <span className="text-emerald-400 font-bold hover:underline cursor-pointer">Administrator Desa</span>.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen font-sans bg-gradient-to-br from-[#02050e] via-[#07101d] to-[#01050b] text-slate-100 relative overflow-hidden">
+      
+      {/* Efek Kristal Cahaya Latar Belakang Tembus Pandang */}
+      <div className="absolute top-0 left-1/4 w-[700px] h-[700px] bg-emerald-500/10 rounded-full blur-[180px] pointer-events-none"></div>
+      <div className="absolute bottom-10 right-10 w-[600px] h-[600px] bg-teal-500/10 rounded-full blur-[180px] pointer-events-none"></div>
+
+      {/* HEADER NAVBAR KACA BENING */}
+      <header className="sticky top-0 z-35 border-b border-white/15 bg-white/[0.02] backdrop-blur-[35px] px-4 py-3 shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-600/50 backdrop-blur-3xl flex items-center justify-center text-white text-xl font-bold shadow-lg shadow-emerald-700/30 border border-emerald-400/50">
+              {villageProfile.logo}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="font-extrabold text-lg tracking-tight text-emerald-300">SIKUDES CLOUD</h1>
+                <span className="text-xs bg-emerald-950/40 text-emerald-300 px-2.5 py-0.5 rounded-full font-medium border border-emerald-500/30 backdrop-blur-3xl">
+                  T.A. {selectedYear}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                {villageProfile.name} • {villageProfile.district}, {villageProfile.regency}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="hidden sm:flex items-center gap-2 bg-white/[0.03] backdrop-blur-3xl px-3 py-1.5 rounded-xl border border-white/15 text-xs shadow-inner">
+              <UserCheck className="w-4 h-4 text-emerald-400" />
+              <div className="text-left">
+                <p className="font-bold text-slate-100 leading-tight">{currentUser.name}</p>
+                <p className="text-[10px] text-emerald-400 font-semibold">{currentUser.roleName}</p>
+              </div>
+            </div>
+
+            <button 
+              onClick={toggleTheme}
+              className="p-2 rounded-xl border border-white/15 bg-white/[0.03] hover:bg-white/[0.08] transition text-slate-300 backdrop-blur-3xl"
+              title="Ganti Tema"
+            >
+              {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4 text-amber-400" />}
+            </button>
+
+            <button
+              onClick={handleLogout}
+              className="p-2 rounded-xl bg-rose-950/30 backdrop-blur-3xl text-rose-300 border border-rose-500/30 hover:bg-rose-900/40 transition flex items-center gap-1.5 text-xs font-bold shadow-lg"
+              title="Keluar dari Akun"
+            >
+              <LogOut className="w-4 h-4" /> <span className="hidden md:inline">Keluar</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {notificationMsg && (
+        <div className="fixed bottom-5 right-5 z-50 bg-slate-950/70 backdrop-blur-3xl text-white px-4 py-3 rounded-xl shadow-2xl border border-white/25 flex items-center gap-3">
+          <Bell className="w-5 h-5 text-emerald-400" />
+          <span className="text-xs font-medium">{notificationMsg}</span>
+        </div>
+      )}
+
+      {/* CONTAINER UTAMA (SIDEBAR STICKY & KONTEN) */}
+      <div className="max-w-7xl mx-auto px-4 py-6 flex flex-col md:flex-row gap-6 relative z-10 items-start">
+        
+        {/* SIDEBAR STICKY ABSOLUT */}
+        <aside className="w-full md:w-64 shrink-0 sticky top-20 h-[calc(100vh-6rem)] overflow-y-auto pr-1 custom-scrollbar space-y-1">
+          <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-3 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)]">
+            <p className="text-[10px] uppercase font-bold text-slate-400 px-3 py-2 tracking-wider">Menu Utama</p>
+            <nav className="space-y-1">
+              {[
+                { id: 'dashboard', label: 'Dashboard APBDes', icon: LayoutDashboard },
+                { id: 'master', label: 'Data Master Desa', icon: Building2 },
+                { id: 'budgeting', label: 'Penganggaran (APBDes)', icon: Layers },
+                { id: 'revenue', label: 'Penerimaan / Pendapatan', icon: ArrowDownLeft },
+                { id: 'expenditure', label: 'Pengeluaran / Belanja', icon: ArrowUpRight },
+                { id: 'bku', label: 'Buku Kas Umum (BKU)', icon: BookOpen },
+                { id: 'reports', label: 'Laporan Keuangan', icon: FileText },
+                { id: 'cash_management', label: 'Manajemen Kas & Bank', icon: Landmark },
+                { id: 'audit', label: 'Audit Trail & Log', icon: History }
+              ].map(item => {
+                const Icon = item.icon;
+                const isActive = activeMenu === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveMenu(item.id)}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition backdrop-blur-xl ${
+                      isActive 
+                        ? 'bg-emerald-600/70 text-white shadow-lg shadow-emerald-900/50 border border-emerald-400/40' 
+                        : 'text-slate-300 hover:bg-white/[0.05] hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                      <span>{item.label}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </nav>
+
+            <div className="mt-6 pt-4 border-t border-white/15">
+              <p className="text-[10px] font-bold uppercase text-slate-400 px-3 mb-2">Aksi Cepat</p>
+              <div className="space-y-2 px-1">
+                {userPermissions.canImport && (
+                  <label className="w-full flex items-center justify-center gap-2 bg-blue-950/20 backdrop-blur-3xl text-blue-300 border border-blue-500/30 py-2 rounded-xl text-xs font-bold hover:bg-blue-900/30 cursor-pointer transition shadow-inner">
+                    <Upload className="w-3.5 h-3.5" /> Import Excel (CSV)
+                    <input type="file" accept=".csv, .txt" onChange={handleFileUpload} className="hidden" />
+                  </label>
+                )}
+
+                {userPermissions.canReset && (
+                  <button
+                    onClick={handleResetTransactions}
+                    className="w-full flex items-center justify-center gap-2 bg-red-950/20 backdrop-blur-3xl text-red-300 border border-red-500/30 py-2 rounded-xl text-xs font-bold hover:bg-red-900/30 transition shadow-inner"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Reset Data Cloud
+                  </button>
+                )}
+
+                {userPermissions.canEdit && (
+                  <>
+                    <button
+                      onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setIsModalTrxOpen(true); }}
+                      className="w-full flex items-center justify-center gap-2 bg-emerald-950/20 backdrop-blur-3xl text-emerald-300 border border-emerald-500/30 py-2 rounded-xl text-xs font-bold hover:bg-emerald-900/30 transition shadow-inner"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Tambah Pendapatan
+                    </button>
+                    <button
+                      onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setIsModalTrxOpen(true); }}
+                      className="w-full flex items-center justify-center gap-2 bg-rose-950/20 backdrop-blur-3xl text-rose-300 border border-rose-500/30 py-2 rounded-xl text-xs font-bold hover:bg-rose-900/30 transition shadow-inner"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Catat Belanja
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        {/* KONTEN UTAMA */}
+        <main className="flex-1 min-w-0 space-y-6">
+
+          {activeMenu === 'dashboard' && (
+            <div className="space-y-6">
+              
+              <div className="bg-gradient-to-r from-emerald-950/30 via-emerald-900/20 to-teal-950/30 backdrop-blur-[40px] rounded-3xl p-6 text-white shadow-2xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
+                <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-emerald-400/15 rounded-full blur-2xl pointer-events-none"></div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="bg-emerald-500/20 text-emerald-200 px-3 py-1 rounded-full text-xs font-bold border border-emerald-400/30 backdrop-blur-3xl">
+                      Crystal Clear Ecosystem
+                    </span>
+                    <span className="text-xs text-emerald-200 font-medium">T.A. {selectedYear}</span>
+                  </div>
+                  <h2 className="text-2xl font-black tracking-tight mt-1">Pengelolaan Keuangan {villageProfile.name}</h2>
+                  <p className="text-xs text-emerald-100 mt-1">
+                    Visualisasi data real-time, grafik pemasukan vs pengeluaran, dan statistik penyerapan anggaran.
+                  </p>
+                </div>
+                {userPermissions.canEdit && (
+                  <button 
+                    onClick={() => { setMasterForm(villageProfile); setIsModalMasterOpen(true); }}
+                    className="bg-white/10 hover:bg-white/20 backdrop-blur-3xl text-white border border-white/25 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shrink-0 shadow-lg"
+                  >
+                    <Edit className="w-4 h-4" /> Edit Profil Desa
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-4 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] relative overflow-hidden">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Realisasi Pendapatan</span>
+                      <p className="text-xl font-black text-emerald-400 mt-1">{formatIDR(financialSummary.approvedRevenue)}</p>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-emerald-950/40 text-emerald-400 border border-emerald-500/30 backdrop-blur-3xl">
+                      <ArrowDownLeft className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center gap-1 text-[10px] font-bold text-emerald-300 bg-emerald-950/20 px-2 py-1 rounded-lg w-fit border border-emerald-500/20 backdrop-blur">
+                    <TrendingUp className="w-3 h-3" /> Transaksi Terverifikasi
+                  </div>
+                </div>
+
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-4 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] relative overflow-hidden">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Realisasi Belanja</span>
+                      <p className="text-xl font-black text-rose-400 mt-1">{formatIDR(financialSummary.approvedExpenditure)}</p>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-rose-950/40 text-rose-400 border border-rose-500/30 backdrop-blur-3xl">
+                      <ArrowUpRight className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center gap-1 text-[10px] font-bold text-rose-300 bg-rose-950/20 px-2 py-1 rounded-lg w-fit border border-rose-500/20 backdrop-blur">
+                    <TrendingDown className="w-3 h-3" /> Total Pengeluaran Kegiatan
+                  </div>
+                </div>
+
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-4 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] relative overflow-hidden">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Rasio Penyerapan</span>
+                      <p className="text-xl font-black text-blue-400 mt-1">{financialSummary.absorptionRate}%</p>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-blue-950/40 text-blue-400 border border-blue-500/30 backdrop-blur-3xl">
+                      <BarChart3 className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <div className="mt-3 w-full bg-white/10 h-2 rounded-full overflow-hidden border border-white/10">
+                    <div 
+                      className="bg-blue-500 h-full rounded-full transition-all duration-500 shadow-[0_0_12px_#3b82f6]" 
+                      style={{ width: `${Math.min(Number(financialSummary.absorptionRate), 100)}%` }}
+                    ></div>
+                  </div>
+                </div>
+
+                <div className="bg-emerald-950/30 backdrop-blur-[40px] text-white rounded-2xl p-4 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] border border-emerald-500/30 relative overflow-hidden flex flex-col justify-between">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="text-[11px] font-bold text-emerald-200 uppercase tracking-wider">Sisa Saldo Kas Aktif</span>
+                      <p className={`text-xl font-black mt-1 ${financialSummary.totalCashBalance < 0 ? 'text-amber-300' : 'text-white'}`}>
+                        {formatIDR(financialSummary.totalCashBalance)}
+                      </p>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-3xl text-white border border-white/20">
+                      <Wallet className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-emerald-200/80 mt-2 italic font-medium">
+                    *Keseimbangan Saldo Bersih Real-time
+                  </p>
+                </div>
+              </div>
+
+              {/* GRAFIK GARIS HALUS PEMASUKAN VS PENGELUARAN */}
+              <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-3xl p-6 text-slate-100 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/15">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 backdrop-blur-3xl">
+                      <LineChart className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-base tracking-tight text-white">Pemasukan vs Pengeluaran</h3>
+                      <p className="text-xs text-slate-400">Grafik tren arus kas bulanan sepanjang Tahun Anggaran {selectedYear}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-xs font-bold bg-white/[0.04] backdrop-blur-3xl px-4 py-2 rounded-2xl border border-white/15 shadow-inner">
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-emerald-500 inline-block shadow-[0_0_10px_#10b981]"></span>
+                      <span className="text-emerald-400">Pemasukan</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="w-3 h-3 rounded-full bg-rose-500 inline-block shadow-[0_0_10px_#f43f5e]"></span>
+                      <span className="text-rose-400">Pengeluaran</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="w-full overflow-x-auto pt-2 pb-2">
+                  <div className="min-w-[650px] h-[300px] relative">
+                    {(() => {
+                      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+                      const data = monthlyChartData;
+                      
+                      const maxVal = Math.max(...data.map(d => Math.max(d.revenue, d.expense)), 140000000);
+                      const chartHeight = 220;
+                      const chartWidth = 700;
+                      const stepX = chartWidth / (months.length - 1);
+
+                      const pointsRev = data.map((d, i) => {
+                        const x = i * stepX;
+                        const y = chartHeight - (d.revenue / maxVal) * chartHeight;
+                        return { x, y };
+                      });
+
+                      const pointsExp = data.map((d, i) => {
+                        const x = i * stepX;
+                        const y = chartHeight - (d.expense / maxVal) * chartHeight;
+                        return { x, y };
+                      });
+
+                      const makeSmoothPath = (pts: {x: number, y: number}[]) => {
+                        if (pts.length === 0) return '';
+                        let path = `M ${pts[0].x} ${pts[0].y}`;
+                        for (let i = 0; i < pts.length - 1; i++) {
+                          const xc = (pts[i].x + pts[i + 1].x) / 2;
+                          const yc = (pts[i].y + pts[i + 1].y) / 2;
+                          path += ` Q ${pts[i].x} ${pts[i].y}, ${xc} ${yc}`;
+                        }
+                        path += ` T ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
+                        return path;
+                      };
+
+                      const pathRev = makeSmoothPath(pointsRev);
+                      const pathExp = makeSmoothPath(pointsExp);
+
+                      const pathRevArea = `${pathRev} L ${chartWidth} ${chartHeight} L 0 ${chartHeight} Z`;
+                      const pathExpArea = `${pathExp} L ${chartWidth} ${chartHeight} L 0 ${chartHeight} Z`;
+
+                      const yTicks = [0, 20000000, 40000000, 60000000, 80000000, 100000000, 120000000, 140000000];
+
+                      return (
+                        <svg viewBox={`0 0 ${chartWidth + 50} ${chartHeight + 40}`} className="w-full h-full overflow-visible">
+                          <defs>
+                            <linearGradient id="gradRev" x1="0%" y1="0%" x2="0%" y2="100%">
+                              <stop offset="0%" stopColor="#10b981" stopOpacity="0.5" />
+                              <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                            </linearGradient>
+                            <linearGradient id="gradExp" x1="0%" y1="0%" x2="0%" y2="100%">
+                              <stop offset="0%" stopColor="#f43f5e" stopOpacity="0.5" />
+                              <stop offset="100%" stopColor="#f43f5e" stopOpacity="0.0" />
+                            </linearGradient>
+                          </defs>
+
+                          {yTicks.map((val, idx) => {
+                            const y = chartHeight - (val / maxVal) * chartHeight;
+                            return (
+                              <g key={idx}>
+                                <line x1="0" y1={y} x2={chartWidth} y2={y} stroke="rgba(255,255,255,0.1)" strokeDasharray="4 4" strokeWidth="1" />
+                                <text x={chartWidth + 10} y={y + 4} fill="#94a3b8" fontSize="10" fontWeight="600">
+                                  {val === 0 ? '0' : `${(val / 1000000).toLocaleString('id-ID')}.000.000`}
+                                </text>
+                              </g>
+                            );
+                          })}
+
+                          <path d={pathRevArea} fill="url(#gradRev)" />
+                          <path d={pathExpArea} fill="url(#gradExp)" />
+
+                          <path d={pathRev} fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" />
+                          <path d={pathExp} fill="none" stroke="#f43f5e" strokeWidth="3" strokeLinecap="round" />
+
+                          {pointsRev.map((pt, i) => (
+                            <g key={`rev-pt-${i}`} className="cursor-pointer group">
+                              <circle cx={pt.x} cy={pt.y} r="4.5" fill="#02050e" stroke="#10b981" strokeWidth="2.5" />
+                              <circle cx={pt.x} cy={pt.y} r="2" fill="#10b981" />
+                            </g>
+                          ))}
+
+                          {pointsExp.map((pt, i) => (
+                            <g key={`exp-pt-${i}`} className="cursor-pointer group">
+                              <circle cx={pt.x} cy={pt.y} r="4.5" fill="#02050e" stroke="#f43f5e" strokeWidth="2.5" />
+                              <circle cx={pt.x} cy={pt.y} r="2" fill="#f43f5e" />
+                            </g>
+                          ))}
+
+                          {months.map((m, i) => {
+                            const x = i * stepX;
+                            return (
+                              <text key={i} x={x} y={chartHeight + 25} fill="#94a3b8" fontSize="11" fontWeight="bold" textAnchor="middle">
+                                {m}
+                              </text>
+                            );
+                          })}
+                        </svg>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-4">
+                  <div className="flex justify-between items-center pb-3 border-b border-white/15">
+                    <div className="flex items-center gap-2">
+                      <Activity className="w-5 h-5 text-emerald-400" />
+                      <h3 className="font-bold text-sm text-slate-100">Penyerapan Anggaran per Jenis Kegiatan</h3>
+                    </div>
+                    <span className="text-[10px] bg-white/[0.04] backdrop-blur-3xl px-2 py-1 rounded font-bold text-slate-300 border border-white/15">
+                      {activityBreakdown.length} Kegiatan
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+                    {activityBreakdown.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic text-center py-6">Belum ada data kegiatan terdaftar</p>
+                    ) : (
+                      activityBreakdown.map((act, idx) => {
+                        const totalVol = act.totalIn + act.totalOut;
+                        const pctOut = totalVol > 0 ? ((act.totalOut / totalVol) * 100).toFixed(0) : '0';
+                        return (
+                          <div key={idx} className="space-y-1.5 p-3 rounded-xl bg-white/[0.04] backdrop-blur-3xl border border-white/15 shadow-inner">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-200">{act.name}</span>
+                              <span className="font-black text-rose-400">{formatIDR(act.totalOut)}</span>
+                            </div>
+                            
+                            <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden flex border border-white/10">
+                              <div className="bg-emerald-500 h-full" style={{ width: `${100 - Number(pctOut)}%` }} title="Penerimaan"></div>
+                              <div className="bg-rose-500 h-full" style={{ width: `${pctOut}%` }} title="Pengeluaran"></div>
+                            </div>
+
+                            <div className="flex justify-between items-center text-[10px] text-slate-400">
+                              <span>Penerimaan: {formatIDR(act.totalIn)}</span>
+                              <span>Saldo Bersih: <b className="text-emerald-400">{formatIDR(act.net)}</b></span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-4">
+                  <div className="flex justify-between items-center pb-3 border-b border-white/15">
+                    <div className="flex items-center gap-2">
+                      <PieChart className="w-5 h-5 text-emerald-400" />
+                      <h3 className="font-bold text-sm text-slate-100">Komposisi Transaksi per Kategori</h3>
+                    </div>
+                    <span className="text-[10px] bg-emerald-950/40 backdrop-blur-3xl text-emerald-300 px-2 py-1 rounded font-bold border border-emerald-500/30">
+                      Real-time Cloud
+                    </span>
+                  </div>
+
+                  <div className="space-y-3 max-h-[320px] overflow-y-auto pr-1">
+                    {categoryBreakdown.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic text-center py-6">Belum ada kategori transaksi</p>
+                    ) : (
+                      categoryBreakdown.map((cat, idx) => {
+                        return (
+                          <div key={idx} className="p-3 rounded-xl bg-white/[0.04] backdrop-blur-3xl border border-white/15 shadow-inner space-y-2">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-100">{cat.name}</span>
+                              <div className="text-right">
+                                <span className="text-emerald-400 font-bold block">+{formatIDR(cat.totalIn)}</span>
+                                <span className="text-rose-400 font-bold block">-{formatIDR(cat.totalOut)}</span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 text-[10px] font-semibold pt-1 border-t border-white/10">
+                              <span className="text-emerald-400">Masuk: {formatIDR(cat.totalIn)}</span>
+                              <span className="text-rose-400 text-right">Keluar: {formatIDR(cat.totalOut)}</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          )}
+
+          {activeMenu === 'master' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              <div className="flex justify-between items-center pb-4 border-b border-white/15">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-100">Data Master Desa & Otoritas</h2>
+                  <p className="text-xs text-slate-400">Pengaturan identitas desa dan pejabat penandatangan</p>
+                </div>
+                {userPermissions.canEdit && (
+                  <button
+                    onClick={() => { setMasterForm(villageProfile); setIsModalMasterOpen(true); }}
+                    className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
+                  >
+                    <Edit className="w-4 h-4" /> Edit Data Master
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+                <div className="p-4 rounded-xl bg-white/[0.04] backdrop-blur-3xl border border-white/15 space-y-2 shadow-inner">
+                  <h3 className="font-bold text-emerald-400">Identitas Pemerintahan Desa</h3>
+                  <p className="text-slate-300"><b>Nama Desa:</b> {villageProfile.name}</p>
+                  <p className="text-slate-300"><b>Kecamatan:</b> {villageProfile.district}</p>
+                  <p className="text-slate-300"><b>Kabupaten:</b> {villageProfile.regency}</p>
+                  <p className="text-slate-300"><b>Provinsi:</b> {villageProfile.province}</p>
+                </div>
+                <div className="p-4 rounded-xl bg-white/[0.04] backdrop-blur-3xl border border-white/15 space-y-2 shadow-inner">
+                  <h3 className="font-bold text-emerald-400">Pejabat Desa</h3>
+                  <p className="text-slate-300"><b>Kepala Desa:</b> {villageProfile.headOfVillage}</p>
+                  <p className="text-slate-300"><b>Sekretaris Desa:</b> {villageProfile.secretary}</p>
+                  <p className="text-slate-300"><b>Kaur Keuangan:</b> {villageProfile.treasurer}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'budgeting' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              <div className="pb-4 border-b border-white/15">
+                <h2 className="text-lg font-bold text-slate-100">Struktur APBDes T.A. {selectedYear}</h2>
+                <p className="text-xs text-slate-400">Rancangan Anggaran Pendapatan dan Belanja Desa</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300">
+                      <th className="p-3">Kode</th>
+                      <th className="p-3">Kategori / Bidang</th>
+                      <th className="p-3 text-right">Pagu Anggaran</th>
+                      {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {budgetItems.map(item => (
+                      <tr key={item.id} className="hover:bg-white/[0.05] transition">
+                        <td className="p-3 font-mono font-bold text-emerald-400">{item.code}</td>
+                        <td className="p-3 font-medium text-slate-200">{item.name}</td>
+                        <td className="p-3 text-right font-semibold text-slate-100">{formatIDR(item.budget)}</td>
+                        {userPermissions.canEdit && (
+                          <td className="p-3 text-center">
+                            <button
+                              onClick={() => { setEditingBudget(item); setBudgetForm({ budget: item.budget }); setIsModalBudgetOpen(true); }}
+                              className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
+                            >
+                              <Edit className="w-3.5 h-3.5" /> Edit
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'revenue' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              <div className="flex justify-between items-center pb-4 border-b border-white/15">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-100">Daftar Penerimaan / Pendapatan Desa</h2>
+                  <p className="text-xs text-slate-400">Seluruh arus masuk kas tercatat</p>
+                </div>
+                {userPermissions.canEdit && (
+                  <button
+                    onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setIsModalTrxOpen(true); }}
+                    className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
+                  >
+                    <Plus className="w-4 h-4" /> Catat Pendapatan
+                  </button>
+                )}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300">
+                      <th className="p-3">Tanggal</th>
+                      <th className="p-3">Kategori</th>
+                      <th className="p-3">Kegiatan Terkait</th>
+                      <th className="p-3">Keterangan</th>
+                      <th className="p-3 text-right">Jumlah (Rp)</th>
+                      {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {sortTransactionsChronologically(transactions)
+                      .filter(t => {
+                        const typeStr = (t.type || '').toLowerCase();
+                        return typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+                      })
+                      .map(t => (
+                        <tr key={t.idKey || t.id} className="hover:bg-white/[0.05] transition">
+                          <td className="p-3 text-slate-400">{t.date}</td>
+                          <td className="p-3 font-bold text-emerald-400">{t.category}</td>
+                          <td className="p-3 font-medium text-slate-300">{t.activity || '-'}</td>
+                          <td className="p-3 text-slate-200">{t.description}</td>
+                          <td className="p-3 text-right font-bold text-emerald-400">+{formatIDR(t.amount)}</td>
+                          {userPermissions.canEdit && (
+                            <td className="p-3 text-center">
+                              <button
+                                onClick={() => openEditTransaction(t)}
+                                className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
+                              >
+                                <Edit className="w-3.5 h-3.5" /> Edit
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'expenditure' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              <div className="flex justify-between items-center pb-4 border-b border-white/15">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-100">Daftar Pengeluaran / Belanja Desa</h2>
+                  <p className="text-xs text-slate-400">Seluruh arus keluar kas dan belanja kegiatan</p>
+                </div>
+                {userPermissions.canEdit && (
+                  <button
+                    onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setIsModalTrxOpen(true); }}
+                    className="bg-rose-600/70 hover:bg-rose-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-rose-400/30"
+                  >
+                    <Plus className="w-4 h-4" /> Catat Belanja
+                  </button>
+                )}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300">
+                      <th className="p-3">Tanggal</th>
+                      <th className="p-3">Kategori</th>
+                      <th className="p-3">Kegiatan Terkait</th>
+                      <th className="p-3">Keterangan</th>
+                      <th className="p-3 text-right">Jumlah (Rp)</th>
+                      {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {sortTransactionsChronologically(transactions)
+                      .filter(t => {
+                        const typeStr = (t.type || '').toLowerCase();
+                        return typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
+                      })
+                      .map(t => (
+                        <tr key={t.idKey || t.id} className="hover:bg-white/[0.05] transition">
+                          <td className="p-3 text-slate-400">{t.date}</td>
+                          <td className="p-3 font-bold text-rose-400">{t.category}</td>
+                          <td className="p-3 font-medium text-slate-300">{t.activity || '-'}</td>
+                          <td className="p-3 text-slate-200">{t.description}</td>
+                          <td className="p-3 text-right font-bold text-rose-400">-{formatIDR(t.amount)}</td>
+                          {userPermissions.canEdit && (
+                            <td className="p-3 text-center">
+                              <button
+                                onClick={() => openEditTransaction(t)}
+                                className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
+                              >
+                                <Edit className="w-3.5 h-3.5" /> Edit
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'bku' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              <div className="pb-4 border-b border-white/15">
+                <h2 className="text-lg font-bold text-slate-100">Buku Kas Umum (BKU) Desa</h2>
+                <p className="text-xs text-slate-400">Catatan kronologis dari bulan Januari hingga Desember (Tanggal 1 s.d. 31)</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-white/15 bg-white/[0.04] font-bold text-slate-300">
+                      <th className="p-3">Tanggal</th>
+                      <th className="p-3">Kegiatan Terkait</th>
+                      <th className="p-3">Uraian / Keterangan</th>
+                      <th className="p-3 text-right">Penerimaan (Rp)</th>
+                      <th className="p-3 text-right">Pengeluaran (Rp)</th>
+                      <th className="p-3 text-right">Saldo Berjalan (Rp)</th>
+                      {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {(() => {
+                      let runningBalance = 0;
+                      return sortTransactionsChronologically(transactions).map((t, idx) => {
+                        const typeStr = (t.type || '').toLowerCase();
+                        const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+                        runningBalance += isInc ? Number(t.amount) : -Number(t.amount);
+                        return (
+                          <tr key={t.idKey || idx} className="hover:bg-white/[0.05] transition">
+                            <td className="p-3 text-slate-400 whitespace-nowrap">{t.date}</td>
+                            <td className="p-3 font-semibold text-emerald-400">{t.activity || '-'}</td>
+                            <td className="p-3 text-slate-300">{t.description}</td>
+                            <td className="p-3 text-right font-bold text-emerald-400">{isInc ? formatIDR(t.amount) : '-'}</td>
+                            <td className="p-3 text-right font-bold text-rose-400">{!isInc ? formatIDR(t.amount) : '-'}</td>
+                            <td className={`p-3 text-right font-black ${runningBalance < 0 ? 'text-rose-400' : 'text-slate-100'}`}>{formatIDR(runningBalance)}</td>
+                            {userPermissions.canEdit && (
+                              <td className="p-3 text-center">
+                                <button
+                                  onClick={() => openEditTransaction(t)}
+                                  className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2 py-1 rounded font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
+                                >
+                                  <Edit className="w-3 h-3" /> Edit
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      });
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================= */}
+          {/* MENU LAPORAN KEUANGAN (BULAN JAN - DES, TANGGAL 1 - 31) */}
+          {/* ========================================================= */}
+          {activeMenu === 'reports' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-3xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/15">
+                <div>
+                  <h2 className="text-xl font-black text-slate-100 flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-emerald-400" /> Pusat Laporan Rekap & Detail Uraian (Jan - Des)
+                  </h2>
+                  <p className="text-xs text-slate-400">Data terurut kronologis dari bulan Januari hingga Desember, serta tanggal 1 sampai 31 paling atas</p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handlePrintReport}
+                    className="bg-emerald-600/80 hover:bg-emerald-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg border border-emerald-400/40 transition"
+                  >
+                    <Printer className="w-4 h-4" /> Cetak Laporan (PDF)
+                  </button>
+                  <button
+                    onClick={handleDownloadReportCSV}
+                    className="bg-blue-600/80 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg border border-blue-400/40 transition"
+                  >
+                    <Download className="w-4 h-4" /> Unduh CSV
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-white/[0.04] backdrop-blur-3xl p-4 rounded-2xl border border-white/15 shadow-inner">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">Jenis Laporan Resmi</label>
+                  <select
+                    value={reportType}
+                    onChange={(e) => setReportType(e.target.value)}
+                    className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="bku">📖 Buku Kas Umum (BKU)</option>
+                    <option value="category">📊 Rekap & Detail Uraian per Kategori</option>
+                    <option value="activity">🎯 Rekap & Detail Uraian per Kegiatan</option>
+                  </select>
+                </div>
+
+                {reportType === 'category' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">Filter Kategori</label>
+                    <select
+                      value={reportCategoryFilter}
+                      onChange={(e) => setReportCategoryFilter(e.target.value)}
+                      className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="Semua">Semua Kategori</option>
+                      {categoryBreakdown.map((c, i) => (
+                        <option key={i} value={c.name}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {reportType === 'activity' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">Filter Jenis Kegiatan</label>
+                    <select
+                      value={reportActivityFilter}
+                      onChange={(e) => setReportActivityFilter(e.target.value)}
+                      className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-xs text-white font-semibold focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="Semua">Semua Kegiatan</option>
+                      {activityBreakdown.map((a, i) => (
+                        <option key={i} value={a.name}>{a.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {/* AREA PRATINJAU DOKUMEN CETAK RESMI DESA */}
+              <div id="printable-report-area" className="bg-white text-slate-900 p-8 rounded-2xl shadow-2xl space-y-8 print:p-0 print:shadow-none">
+                
+                <div className="text-center border-b-2 border-slate-900 pb-4 space-y-1">
+                  <p className="text-xs uppercase font-extrabold tracking-widest text-slate-700">Pemerintahan Kabupaten {villageProfile.regency}</p>
+                  <p className="text-xs uppercase font-bold tracking-wider text-slate-700">{villageProfile.district}</p>
+                  <h3 className="text-lg font-black uppercase text-slate-900">Pemerintahan {villageProfile.name}</h3>
+                  <h4 className="text-sm font-bold uppercase text-emerald-800 pt-1">
+                    {reportType === 'bku' && 'LAPORAN BUKU KAS UMUM (BKU)'}
+                    {reportType === 'category' && 'LAPORAN REKAPITULASI & DETAIL URAIAN PER KATEGORI APBDES'}
+                    {reportType === 'activity' && 'LAPORAN REKAPITULASI & DETAIL URAIAN PER JENIS KEGIATAN DESA'}
+                  </h4>
+                  <p className="text-xs text-slate-600">Tahun Anggaran {selectedYear} (Urut Kronologis: Jan s.d. Des, Tgl 1 s.d. 31)</p>
+                </div>
+
+                {/* 1. JIKA LAPORAN BKU */}
+                {reportType === 'bku' && (
+                  <div className="overflow-x-auto space-y-4">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-900 font-bold">
+                          <th className="p-2.5 border border-slate-300">Tanggal</th>
+                          <th className="p-2.5 border border-slate-300">Kegiatan Terkait</th>
+                          <th className="p-2.5 border border-slate-300">Uraian / Keterangan</th>
+                          <th className="p-2.5 border border-slate-300 text-right">Penerimaan (Rp)</th>
+                          <th className="p-2.5 border border-slate-300 text-right">Pengeluaran (Rp)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortTransactionsChronologically(transactions).length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data transaksi tercatat</td>
+                          </tr>
+                        ) : (
+                          sortTransactionsChronologically(transactions).map((t, idx) => {
+                            const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+                            return (
+                              <tr key={idx} className="border-b border-slate-200">
+                                <td className="p-2.5 border border-slate-300">{t.date}</td>
+                                <td className="p-2.5 border border-slate-300 font-semibold">{t.activity || '-'}</td>
+                                <td className="p-2.5 border border-slate-300">{t.description}</td>
+                                <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{isInc ? formatIDR(t.amount) : '-'}</td>
+                                <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{!isInc ? formatIDR(t.amount) : '-'}</td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* 2. JIKA LAPORAN PER KATEGORI */}
+                {reportType === 'category' && (
+                  <div className="space-y-8">
+                    <div className="space-y-3">
+                      <h5 className="text-xs font-black uppercase text-slate-900 bg-slate-200 px-3 py-1.5 rounded border border-slate-300">
+                        A. Tabel Rekapitulasi per Kategori APBDes
+                      </h5>
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-900 font-bold">
+                            <th className="p-2.5 border border-slate-300">No</th>
+                            <th className="p-2.5 border border-slate-300">Kategori APBDes</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Total Pendapatan (Rp)</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Total Belanja (Rp)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {categoryBreakdown
+                            .filter(c => reportCategoryFilter === 'Semua' || c.name === reportCategoryFilter)
+                            .map((c, idx) => (
+                              <tr key={idx} className="border-b border-slate-200">
+                                <td className="p-2.5 border border-slate-300 text-center">{idx + 1}</td>
+                                <td className="p-2.5 border border-slate-300 font-bold">{c.name}</td>
+                                <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{formatIDR(c.totalIn)}</td>
+                                <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{formatIDR(c.totalOut)}</td>
+                              </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="space-y-3">
+                      <h5 className="text-xs font-black uppercase text-slate-900 bg-slate-200 px-3 py-1.5 rounded border border-slate-300">
+                        B. Rincian Detail Transaksi & Uraian per Kategori (Urut Kronologis: Jan - Des)
+                      </h5>
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-900 font-bold">
+                            <th className="p-2.5 border border-slate-300">Tanggal</th>
+                            <th className="p-2.5 border border-slate-300">Kategori APBDes</th>
+                            <th className="p-2.5 border border-slate-300">Uraian / Keterangan Transaksi</th>
+                            <th className="p-2.5 border border-slate-300">Jenis</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Nominal (Rp)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortTransactionsChronologically(transactions)
+                            .filter(t => reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter)
+                            .map((t, idx) => {
+                              const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+                              return (
+                                <tr key={idx} className="border-b border-slate-200">
+                                  <td className="p-2.5 border border-slate-300">{t.date}</td>
+                                  <td className="p-2.5 border border-slate-300 font-bold">{t.category}</td>
+                                  <td className="p-2.5 border border-slate-300 text-slate-800">{t.description}</td>
+                                  <td className="p-2.5 border border-slate-300 font-semibold">{t.type}</td>
+                                  <td className={`p-2.5 border border-slate-300 text-right font-bold ${isInc ? 'text-emerald-700' : 'text-rose-700'}`}>
+                                    {isInc ? '+' : '-'}{formatIDR(t.amount)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. JIKA LAPORAN PER KEGIATAN */}
+                {reportType === 'activity' && (
+                  <div className="space-y-8">
+                    <div className="space-y-3">
+                      <h5 className="text-xs font-black uppercase text-slate-900 bg-slate-200 px-3 py-1.5 rounded border border-slate-300">
+                        A. Tabel Rekapitulasi per Jenis Kegiatan Desa
+                      </h5>
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-900 font-bold">
+                            <th className="p-2.5 border border-slate-300">No</th>
+                            <th className="p-2.5 border border-slate-300">Jenis Kegiatan Desa</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Penerimaan (Rp)</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Pengeluaran (Rp)</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Saldo Bersih (Rp)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activityBreakdown
+                            .filter(a => reportActivityFilter === 'Semua' || a.name === reportActivityFilter)
+                            .map((a, idx) => (
+                              <tr key={idx} className="border-b border-slate-200">
+                                <td className="p-2.5 border border-slate-300 text-center">{idx + 1}</td>
+                                <td className="p-2.5 border border-slate-300 font-bold">{a.name}</td>
+                                <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{formatIDR(a.totalIn)}</td>
+                                <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{formatIDR(a.totalOut)}</td>
+                                <td className="p-2.5 border border-slate-300 text-right font-black text-slate-900">{formatIDR(a.net)}</td>
+                              </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="space-y-3">
+                      <h5 className="text-xs font-black uppercase text-slate-900 bg-slate-200 px-3 py-1.5 rounded border border-slate-300">
+                        B. Rincian Detail Transaksi & Uraian per Kegiatan (Urut Kronologis: Jan s.d. Des, Tgl 1 s.d. 31)
+                      </h5>
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-900 font-bold">
+                            <th className="p-2.5 border border-slate-300">Tanggal</th>
+                            <th className="p-2.5 border border-slate-300">Jenis Kegiatan</th>
+                            <th className="p-2.5 border border-slate-300">Kategori APBDes</th>
+                            <th className="p-2.5 border border-slate-300">Uraian / Keterangan Transaksi</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Penerimaan (Rp)</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Pengeluaran (Rp)</th>
+                            <th className="p-2.5 border border-slate-300 text-right">Saldo (Rp)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            let runningBal = 0;
+                            const sortedTrx = sortTransactionsChronologically(transactions);
+                            const filteredTrx = sortedTrx.filter(t => {
+                              const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                              return reportActivityFilter === 'Semua' || actName === reportActivityFilter;
+                            });
+
+                            if (filteredTrx.length === 0) {
+                              return (
+                                <tr>
+                                  <td colSpan={7} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data rincian transaksi kegiatan</td>
+                                </tr>
+                              );
+                            }
+
+                            return filteredTrx.map((t, idx) => {
+                              const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                              const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+                              const amt = Number(t.amount || 0);
+                              runningBal += isInc ? amt : -amt;
+
+                              return (
+                                <tr key={idx} className="border-b border-slate-200">
+                                  <td className="p-2.5 border border-slate-300">{t.date}</td>
+                                  <td className="p-2.5 border border-slate-300 font-bold text-emerald-900">{actName}</td>
+                                  <td className="p-2.5 border border-slate-300">{t.category}</td>
+                                  <td className="p-2.5 border border-slate-300 text-slate-800">{t.description}</td>
+                                  <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">
+                                    {isInc ? formatIDR(amt) : '-'}
+                                  </td>
+                                  <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">
+                                    {!isInc ? formatIDR(amt) : '-'}
+                                  </td>
+                                  <td className="p-2.5 border border-slate-300 text-right font-black text-slate-900">
+                                    {formatIDR(runningBal)}
+                                  </td>
+                                </tr>
+                              );
+                            });
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 pt-10 text-xs text-center font-medium page-break-inside-avoid">
+                  <div className="space-y-16">
+                    <p>Mengetahui,<br /><b>Kepala Desa {villageProfile.name}</b></p>
+                    <p className="underline font-bold uppercase">{villageProfile.headOfVillage}</p>
+                  </div>
+                  <div className="space-y-16">
+                    <p>{villageProfile.regency}, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}<br /><b>Kaur Keuangan / Bendahara</b></p>
+                    <p className="underline font-bold uppercase">{villageProfile.treasurer}</p>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'cash_management' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              <div className="pb-4 border-b border-white/15">
+                <h2 className="text-lg font-bold text-slate-100">Manajemen Kas & Rekening Bank Desa</h2>
+                <p className="text-xs text-slate-400">Pengelolaan saldo kas tunai dan rekening bank</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {accounts.map(a => (
+                  <div key={a.id} className="p-4 rounded-2xl border border-white/15 bg-white/[0.04] backdrop-blur-3xl space-y-3 shadow-inner">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="text-xs font-bold text-slate-400 uppercase">{a.type}</span>
+                        <h3 className="font-bold text-sm text-slate-100">{a.name}</h3>
+                      </div>
+                      {userPermissions.canEdit && (
+                        <button
+                          onClick={() => { setEditingAccount(a); setAccountForm({ name: a.name, balance: a.balance }); setIsModalAccountOpen(true); }}
+                          className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 backdrop-blur-3xl"
+                        >
+                          <Edit className="w-3 h-3" /> Edit
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xl font-black text-emerald-400">{formatIDR(a.balance)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'audit' && (
+            <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+              <div className="pb-4 border-b border-white/15">
+                <h2 className="text-lg font-bold text-slate-100">Audit Trail System</h2>
+                <p className="text-xs text-slate-400">Jejak aktivitas digital pengguna dan sistem</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300">
+                      <th className="p-3">Waktu</th>
+                      <th className="p-3">Pengguna</th>
+                      <th className="p-3">Modul</th>
+                      <th className="p-3">Aktivitas</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/10">
+                    {auditLogs.map((log, idx) => (
+                      <tr key={log.idKey || idx} className="hover:bg-white/[0.05] transition">
+                        <td className="p-3 font-mono text-slate-400">{log.timestamp}</td>
+                        <td className="p-3 font-bold text-emerald-400">{log.user}</td>
+                        <td className="p-3"><span className="bg-white/[0.06] backdrop-blur-3xl px-2 py-0.5 rounded text-[10px] text-slate-300 border border-white/15">{log.module}</span></td>
+                        <td className="p-3 font-medium text-slate-200">{log.action}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+        </main>
+      </div>
+
+      {/* MODAL TRANSAKSI KACA BENING */}
+      {isModalTrxOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
+          <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-white/25 space-y-5">
+            <div className="flex justify-between items-center border-b border-white/15 pb-3">
+              <h3 className="font-bold text-base text-slate-100">{editingTrx ? 'Edit Transaksi' : `Pencatatan Transaksi ${trxType}`} (Cloud)</h3>
+              <button onClick={() => setIsModalTrxOpen(false)} className="text-slate-400 hover:text-white"><XCircle className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleSaveTransaction} className="space-y-4 text-xs">
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Kategori APBDes</label>
+                <select 
+                  value={formData.category}
+                  onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                  className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                  required
+                >
+                  <option value="">-- Pilih Kategori --</option>
+                  {budgetItems.filter(b => trxType === 'Pendapatan' ? b.category === 'Pendapatan' : b.category === 'Belanja').map(b => (
+                    <option key={b.id} value={b.name} className="bg-slate-900">{b.code} - {b.name}</option>
+                  ))}
+                  <option value="Lainnya" className="bg-slate-900">➕ Lainnya (Input Kategori Baru...)</option>
+                </select>
+                {formData.category === 'Lainnya' && (
+                  <input
+                    type="text"
+                    placeholder="Masukkan nama Kategori baru..."
+                    value={formData.customCategory}
+                    onChange={(e) => setFormData({ ...formData, customCategory: e.target.value })}
+                    className="w-full mt-2 p-2.5 rounded-xl border border-emerald-500/50 bg-emerald-950/40 text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                    required
+                  />
+                )}
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="font-bold text-slate-300">Kegiatan Terkait (Opsional)</label>
+                  {formData.activity && formData.activity !== '-' && formData.activity !== 'Lainnya' && (
+                    <span className="text-[11px] bg-emerald-950/80 text-emerald-300 px-2 py-0.5 rounded-md font-bold border border-emerald-500/30">
+                      Saldo Kegiatan: {formatIDR(getActivityBalance(formData.activity))}
+                    </span>
+                  )}
+                </div>
+                <select
+                  value={formData.activity}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFormData({ 
+                      ...formData, 
+                      activity: val, 
+                      customActivity: val === 'Lainnya' ? formData.customActivity : '' 
+                    });
+                  }}
+                  className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                >
+                  <option value="">-- Tanpa Kegiatan Khusus / Umum --</option>
+                  {availableActivities.map((act, idx) => (
+                    <option key={idx} value={act} className="bg-slate-900">{act} (Saldo: {formatIDR(getActivityBalance(act))})</option>
+                  ))}
+                  <option value="Lainnya" className="bg-slate-900">➕ Tambah Jenis Kegiatan Baru...</option>
+                </select>
+
+                {formData.activity === 'Lainnya' && (
+                  <div className="mt-2 space-y-1">
+                    <input
+                      type="text"
+                      placeholder="Ketik nama kegiatan baru (Contoh: Operasional PAUD)..."
+                      value={formData.customActivity}
+                      onChange={(e) => setFormData({ ...formData, customActivity: e.target.value })}
+                      className="w-full p-2.5 rounded-xl border border-emerald-500/50 bg-emerald-950/40 text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                      autoFocus
+                      required
+                    />
+                    <p className="text-[10px] text-slate-400 italic">*Ketik nama kegiatan baru dengan lengkap tanpa terputus.</p>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Uraian Transaksi</label>
+                <input 
+                  type="text" 
+                  placeholder="Contoh: Pembayaran Honor..." 
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold block mb-1 text-slate-300">Rekening Kas</label>
+                  <select 
+                    value={formData.accountId}
+                    onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
+                    className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner"
+                  >
+                    {accounts.map(a => (<option key={a.id} value={a.id} className="bg-slate-900">{a.name}</option>))}
+                  </select>
+                </div>
+                <div>
+                  <label className="font-bold block mb-1 text-slate-300">Nominal (Rp)</label>
+                  <input 
+                    type="number" 
+                    placeholder="0" 
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                    className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-bold backdrop-blur-3xl shadow-inner"
+                    required
+                  />
+                </div>
+              </div>
+              <div className="pt-3 flex gap-2 justify-end">
+                <button type="button" onClick={() => setIsModalTrxOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] backdrop-blur-3xl">Batal</button>
+                <button type="submit" className="px-5 py-2.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/40 backdrop-blur-3xl">Simpan Perubahan</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL MASTER DESA */}
+      {isModalMasterOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
+          <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-white/25 space-y-5">
+            <div className="flex justify-between items-center border-b border-white/15 pb-3">
+              <h3 className="font-bold text-base text-slate-100">Edit Data Master & Pejabat Desa</h3>
+              <button onClick={() => setIsModalMasterOpen(false)} className="text-slate-400 hover:text-white"><XCircle className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={handleSaveMaster} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Nama Desa</label>
+                <input type="text" value={masterForm.name} onChange={e => setMasterForm({...masterForm, name: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="font-bold block mb-1 text-slate-300">Kecamatan</label>
+                  <input type="text" value={masterForm.district} onChange={e => setMasterForm({...masterForm, district: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                </div>
+                <div>
+                  <label className="font-bold block mb-1 text-slate-300">Kabupaten</label>
+                  <input type="text" value={masterForm.regency} onChange={e => setMasterForm({...masterForm, regency: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                </div>
+              </div>
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Kepala Desa</label>
+                <input type="text" value={masterForm.headOfVillage} onChange={e => setMasterForm({...masterForm, headOfVillage: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+              </div>
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Sekretaris Desa</label>
+                <input type="text" value={masterForm.secretary} onChange={e => setMasterForm({...masterForm, secretary: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+              </div>
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Kaur Keuangan</label>
+                <input type="text" value={masterForm.treasurer} onChange={e => setMasterForm({...masterForm, treasurer: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+              </div>
+              <div className="pt-3 flex gap-2 justify-end">
+                <button type="button" onClick={() => setIsModalMasterOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] backdrop-blur-3xl">Batal</button>
+                <button type="submit" className="px-5 py-2.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/40 backdrop-blur-3xl">Simpan Profil</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ANGGARAN */}
+      {isModalBudgetOpen && editingBudget && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
+          <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-white/25 space-y-4">
+            <h3 className="font-bold text-base text-slate-100">Edit Pagu Anggaran</h3>
+            <p className="text-xs text-slate-400">{editingBudget.name}</p>
+            <form onSubmit={handleSaveBudget} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Pagu Anggaran (Rp)</label>
+                <input type="number" value={budgetForm.budget} onChange={e => setBudgetForm({ budget: e.target.value })} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-bold backdrop-blur-3xl shadow-inner" required />
+              </div>
+              <div className="pt-2 flex gap-2 justify-end">
+                <button type="button" onClick={() => setIsModalBudgetOpen(false)} className="px-3.5 py-2 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] backdrop-blur-3xl">Batal</button>
+                <button type="submit" className="px-4 py-2 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/40 backdrop-blur-3xl">Simpan</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL REKENING */}
+      {isModalAccountOpen && editingAccount && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
+          <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-white/25 space-y-4">
+            <h3 className="font-bold text-base text-slate-100">Edit Akun Kas / Bank</h3>
+            <form onSubmit={handleSaveAccount} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Nama Akun</label>
+                <input type="text" value={accountForm.name} onChange={e => setAccountForm({ ...accountForm, name: e.target.value })} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+              </div>
+              <div>
+                <label className="font-bold block mb-1 text-slate-300">Saldo Awal (Rp)</label>
+                <input type="number" value={accountForm.balance} onChange={e => setAccountForm({ ...accountForm, balance: e.target.value })} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-bold backdrop-blur-3xl shadow-inner" required />
+              </div>
+              <div className="pt-2 flex gap-2 justify-end">
+                <button type="button" onClick={() => setIsModalAccountOpen(false)} className="px-3.5 py-2 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] backdrop-blur-3xl">Batal</button>
+                <button type="submit" className="px-4 py-2 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/40 backdrop-blur-3xl">Simpan</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ANIMASI UPLOAD */}
+      {isUploading && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
+          <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-md w-full p-6 shadow-2xl border border-white/25 space-y-6 text-center">
+            <div className="w-16 h-16 bg-emerald-950/80 text-emerald-400 rounded-full flex items-center justify-center mx-auto animate-pulse border border-emerald-400/40 shadow-inner">
+              <RefreshCw className="w-8 h-8 animate-spin" />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-slate-100">Sedang Mengimport Data</h3>
+              <p className="text-xs text-slate-400 mt-1">Sistem sedang memproses file dan mengirim data ke Cloud...</p>
+            </div>
+            <div className="space-y-2 text-left">
+              <div className="flex justify-between text-xs font-bold text-slate-300">
+                <span>{uploadStatusText}</span>
+                <span>{uploadProgressPct}%</span>
+              </div>
+              <div className="w-full bg-white/10 h-3 rounded-full overflow-hidden p-0.5 border border-white/20 backdrop-blur-3xl">
+                <div className="bg-emerald-500 h-full rounded-full transition-all duration-500 shadow-[0_0_12px_#10b981]" style={{ width: `${uploadProgressPct}%` }}></div>
+              </div>
+            </div>
+            <div className="space-y-2 text-left bg-white/[0.04] backdrop-blur-3xl p-4 rounded-2xl text-xs border border-white/15 shadow-inner">
+              <div className={`flex items-center gap-2.5 ${uploadStep >= 1 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                {uploadStep > 1 ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Clock className="w-4 h-4" />}
+                <span>1. Membaca & Memindai File CSV</span>
+              </div>
+              <div className={`flex items-center gap-2.5 ${uploadStep >= 2 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                {uploadStep > 2 ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Clock className="w-4 h-4" />}
+                <span>2. Mengurai Baris & Teks Transaksi</span>
+              </div>
+              <div className={`flex items-center gap-2.5 ${uploadStep >= 3 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                {uploadStep > 3 ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Clock className="w-4 h-4" />}
+                <span>3. Memvalidasi Nominal & Kategori</span>
+              </div>
+              <div className={`flex items-center gap-2.5 ${uploadStep >= 4 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
+                {uploadStep > 4 ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <Clock className="w-4 h-4" />}
+                <span>4. Sinkronisasi ke Firebase Cloud Database</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
