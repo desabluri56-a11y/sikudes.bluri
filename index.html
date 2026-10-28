@@ -1,45 +1,40 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SIKUDES CLOUD - Sistem Keuangan Desa</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIKUDES CLOUD - Sistem Informasi Keuangan Desa</title>
   
-  <!-- Tailwind CSS -->
+  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- React & ReactDOM (Production) -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   
-  <!-- Babel Standalone untuk memproses JSX/TSX di browser -->
+  <!-- Babel CDN for JSX -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   
-  <!-- Lucide Icons -->
+  <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  
-  <!-- Firebase App & Database via Compatibility Layer -->
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics-compat.js"></script>
 
   <style>
-    /* Custom Scrollbar for Dark Glassmorphism */
-    .custom-scrollbar::-webkit-scrollbar {
+    /* Custom Scrollbar for Glassmorphism UI */
+    ::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
-    .custom-scrollbar::-webkit-scrollbar-track {
+    ::-webkit-scrollbar-track {
       background: rgba(255, 255, 255, 0.02);
     }
-    .custom-scrollbar::-webkit-scrollbar-thumb {
+    ::-webkit-scrollbar-thumb {
       background: rgba(255, 255, 255, 0.15);
       border-radius: 9999px;
     }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    ::-webkit-scrollbar-thumb:hover {
       background: rgba(16, 185, 129, 0.4);
     }
-
+    
     @media print {
       body * {
         visibility: hidden;
@@ -52,21 +47,19 @@
         left: 0;
         top: 0;
         width: 100%;
-        background: white !important;
-        color: black !important;
-        padding: 0 !important;
       }
     }
   </style>
 </head>
-<body class="bg-[#02050e] text-slate-100 font-sans antialiased selection:bg-emerald-500 selection:text-white">
+<body class="bg-gradient-to-br from-[#02050e] via-[#07101d] to-[#01050b] text-slate-100 min-h-screen font-sans selection:bg-emerald-500 selection:text-white relative overflow-x-hidden">
 
   <div id="root"></div>
 
-  <script type="text/babel">
-    const { useState, useEffect, useMemo, useRef } = React;
+  <!-- Firebase App SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getDatabase, ref, set, push, onValue, update } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-    // Konfigurasi Firebase
     const firebaseConfig = {
       apiKey: "AIzaSyBnEFrxm29iURSkKGwEU-ba0pR3Ov7VwPM",
       authDomain: "sikudes-bluri.firebaseapp.com",
@@ -78,28 +71,15 @@
       measurementId: "G-61STF2WPZL"
     };
 
-    // Inisialisasi Firebase
-    if (!firebase.apps.length) {
-      firebase.initializeApp(firebaseConfig);
-    }
-    const db = firebase.database();
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
 
-    // Icon Wrapper Component untuk Lucide Icons
-    const Icon = ({ name, className = "w-4 h-4" }) => {
-      const iconRef = useRef(null);
-      useEffect(() => {
-        if (iconRef.current) {
-          iconRef.current.innerHTML = `<i data-lucide="${name}" class="${className}"></i>`;
-          lucide.createIcons({
-            attrs: { class: className },
-            nameAttr: 'data-lucide'
-          });
-        }
-      }, [name, className]);
-      return <span ref={iconRef} className="inline-flex items-center justify-center"></span>;
-    };
+    window.FirebaseDB = { db, ref, set, push, onValue, update };
+  </script>
 
-    // Data Role & Kredensial Khusus
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
     const INITIAL_ROLES = [
       { 
         id: 'kaur_keuangan', 
@@ -153,7 +133,6 @@
       { id: 5, name: 'Tim Inspektorat', role: 'auditor', email: 'auditor@lamongankab.go.id', status: 'Aktif' }
     ];
 
-    // Helper Formatter
     const formatIDR = (val) => {
       if (val === undefined || val === null || isNaN(val)) return 'Rp0';
       return new Intl.NumberFormat('id-ID', {
@@ -163,7 +142,6 @@
       }).format(val);
     };
 
-    // Helper Urutkan Tanggal Kronologis
     const parseDateToNumber = (dateStr) => {
       if (!dateStr) return 0;
       if (dateStr.includes('-')) {
@@ -270,48 +248,56 @@
       const [editingAccount, setEditingAccount] = useState(null);
       const [accountForm, setAccountForm] = useState({ name: '', balance: '' });
 
-      const handleRoleChange = (roleId) => {
-        setSelectedRoleId(roleId);
-        const selectedRoleObj = INITIAL_ROLES.find(r => r.id === roleId);
-        if (selectedRoleObj) {
-          setLoginEmail(selectedRoleObj.email);
+      useEffect(() => {
+        if (window.lucide) {
+          window.lucide.createIcons();
         }
-      };
+      });
 
       useEffect(() => {
-        const trxRef = db.ref('transactions');
-        trxRef.on('value', (snapshot) => {
-          const data = snapshot.val();
-          if (data) {
-            const loadedTrx = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
-            setTransactions(sortTransactionsChronologically(loadedTrx));
-          } else {
-            setTransactions([]);
+        const interval = setInterval(() => {
+          if (window.FirebaseDB && window.FirebaseDB.db) {
+            const { db, ref, onValue } = window.FirebaseDB;
+            
+            const trxRef = ref(db, 'transactions');
+            onValue(trxRef, (snapshot) => {
+              const data = snapshot.val();
+              if (data) {
+                const loadedTrx = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
+                setTransactions(sortTransactionsChronologically(loadedTrx));
+              } else {
+                setTransactions([]);
+              }
+            });
+
+            const accRef = ref(db, 'accounts');
+            onValue(accRef, (snapshot) => {
+              const data = snapshot.val();
+              if (data) setAccounts(data);
+            });
+
+            const budgetRef = ref(db, 'budgetItems');
+            onValue(budgetRef, (snapshot) => {
+              const data = snapshot.val();
+              if (data) setBudgetItems(data);
+            });
+
+            const auditRef = ref(db, 'auditLogs');
+            onValue(auditRef, (snapshot) => {
+              const data = snapshot.val();
+              if (data) {
+                const loadedAudit = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
+                setAuditLogs(loadedAudit.reverse());
+              } else {
+                setAuditLogs([]);
+              }
+            });
+
+            clearInterval(interval);
           }
-        });
+        }, 300);
 
-        const accRef = db.ref('accounts');
-        accRef.on('value', (snapshot) => {
-          const data = snapshot.val();
-          if (data) setAccounts(data);
-        });
-
-        const budgetRef = db.ref('budgetItems');
-        budgetRef.on('value', (snapshot) => {
-          const data = snapshot.val();
-          if (data) setBudgetItems(data);
-        });
-
-        const auditRef = db.ref('auditLogs');
-        auditRef.on('value', (snapshot) => {
-          const data = snapshot.val();
-          if (data) {
-            const loadedAudit = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
-            setAuditLogs(loadedAudit.reverse());
-          } else {
-            setAuditLogs([]);
-          }
-        });
+        return () => clearInterval(interval);
       }, []);
 
       const showToast = (msg) => {
@@ -319,8 +305,12 @@
         setTimeout(() => setNotificationMsg(null), 4000);
       };
 
-      const toggleTheme = () => {
-        setTheme(prev => prev === 'light' ? 'dark' : 'light');
+      const handleRoleChange = (roleId) => {
+        setSelectedRoleId(roleId);
+        const selectedRoleObj = INITIAL_ROLES.find(r => r.id === roleId);
+        if (selectedRoleObj) {
+          setLoginEmail(selectedRoleObj.email);
+        }
       };
 
       const handleLoginSubmit = (e) => {
@@ -433,6 +423,10 @@
         return { totalBudgetRevenue, totalBudgetExpenditure, approvedRevenue, approvedExpenditure, totalCashBalance, absorptionRate };
       }, [budgetItems, transactions]);
 
+      const recentTransactions = useMemo(() => {
+        return [...transactions].reverse().slice(0, 5);
+      }, [transactions]);
+
       const monthlyChartData = useMemo(() => {
         const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
         const revByMonth = new Array(12).fill(0);
@@ -443,25 +437,18 @@
           let monthIndex = -1;
           if (t.date.includes('-')) {
             const parts = t.date.split('-');
-            if (parts.length >= 2) {
-              monthIndex = parseInt(parts[1], 10) - 1;
-            }
+            if (parts.length >= 2) monthIndex = parseInt(parts[1], 10) - 1;
           } else if (t.date.includes('/')) {
             const parts = t.date.split('/');
-            if (parts.length >= 2) {
-              monthIndex = parseInt(parts[1], 10) - 1;
-            }
+            if (parts.length >= 2) monthIndex = parseInt(parts[1], 10) - 1;
           }
 
           if (monthIndex >= 0 && monthIndex < 12) {
             const amt = Number(t.amount || 0);
             const typeStr = (t.type || '').toLowerCase();
             const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
-            if (isInc) {
-              revByMonth[monthIndex] += amt;
-            } else {
-              expByMonth[monthIndex] += amt;
-            }
+            if (isInc) revByMonth[monthIndex] += amt;
+            else expByMonth[monthIndex] += amt;
           }
         });
 
@@ -516,9 +503,7 @@
         })).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
       }, [transactions]);
 
-      const handlePrintReport = () => {
-        window.print();
-      };
+      const handlePrintReport = () => window.print();
 
       const handleDownloadReportCSV = () => {
         let csvContent = "data:text/csv;charset=utf-8,";
@@ -567,21 +552,22 @@
           return;
         }
 
+        const { db, ref, set } = window.FirebaseDB;
         setIsUploading(true);
         setUploadStep(1);
         setUploadStatusText('Menghapus seluruh data transaksi di Cloud...');
         setUploadProgressPct(30);
 
         try {
-          await db.ref('transactions').set(null);
-          await db.ref('auditLogs').set(null);
+          await set(ref(db, 'transactions'), null);
+          await set(ref(db, 'auditLogs'), null);
 
           setUploadStep(3);
           setUploadStatusText('Mereset saldo rekening ke Rp 0...');
           setUploadProgressPct(70);
 
           const resetAccs = accounts.map(acc => ({ ...acc, balance: 0 }));
-          await db.ref('accounts').set(resetAccs);
+          await set(ref(db, 'accounts'), resetAccs);
 
           setUploadStep(4);
           setUploadStatusText('Reset database berhasil!');
@@ -606,6 +592,7 @@
         const file = e.target.files?.[0];
         if (!file) return;
 
+        const { db, ref, set, push, update } = window.FirebaseDB;
         setIsUploading(true);
         setUploadStep(1);
         setUploadStatusText('Membaca dan memindai file CSV...');
@@ -676,6 +663,7 @@
             let totalExpenditure = 0;
             
             const updates = {};
+            const transactionsRef = ref(db, 'transactions');
 
             for (let i = 1; i < rows.length; i++) {
               const row = rows[i];
@@ -703,7 +691,7 @@
 
               if (amount <= 0) continue;
 
-              const newTrxRef = db.ref('transactions').push();
+              const newTrxRef = push(transactionsRef);
               const newTrxId = `TRX-IMP-${Date.now().toString().slice(-4)}-${i}`;
 
               const formattedTrx = {
@@ -742,7 +730,7 @@
             setUploadStatusText('Menyimpan data massal ke Firebase Cloud Database...');
             setUploadProgressPct(85);
 
-            await db.ref().update(updates);
+            await update(ref(db), updates);
 
             const updatedAccs = accounts.map(acc => {
               if (acc.id === '101') {
@@ -751,10 +739,10 @@
               }
               return acc;
             });
-            await db.ref('accounts').set(updatedAccs);
+            await set(ref(db, 'accounts'), updatedAccs);
 
-            const auditRef = db.ref('auditLogs').push();
-            await auditRef.set({
+            const auditRef = push(ref(db, 'auditLogs'));
+            await set(auditRef, {
               timestamp: new Date().toLocaleString('id-ID'),
               user: currentUser ? currentUser.name : 'User',
               action: `Berhasil mengimport ${importedCount} data transaksi ke Cloud`,
@@ -792,6 +780,7 @@
           return;
         }
 
+        const { db, ref, set, push } = window.FirebaseDB;
         const finalCategory = formData.category === 'Lainnya' ? formData.customCategory.trim() : formData.category;
         if (!finalCategory) {
           showToast('⚠️ Harap isi/pilih Kategori APBDes!');
@@ -815,10 +804,11 @@
             netAmount: grossAmount
           };
 
-          db.ref(`transactions/${editingTrx.idKey}`).set(updatedTrxData);
+          const trxRef = ref(db, `transactions/${editingTrx.idKey}`);
+          set(trxRef, updatedTrxData);
 
-          const auditRef = db.ref('auditLogs').push();
-          auditRef.set({
+          const auditRef = push(ref(db, 'auditLogs'));
+          set(auditRef, {
             timestamp: new Date().toLocaleString('id-ID'),
             user: currentUser.name,
             action: `Mengedit transaksi ${editingTrx.id} menjadi ${formatIDR(grossAmount)}`,
@@ -846,8 +836,9 @@
             approvedAt: new Date().toISOString().split('T')[0]
           };
 
-          const newTrxRef = db.ref('transactions').push();
-          newTrxRef.set(newTransaction);
+          const trxRef = ref(db, 'transactions');
+          const newTrxRef = push(trxRef);
+          set(newTrxRef, newTransaction);
 
           const updatedAccs = accounts.map(acc => {
             if (acc.id === formData.accountId) {
@@ -856,10 +847,10 @@
             }
             return acc;
           });
-          db.ref('accounts').set(updatedAccs);
+          set(ref(db, 'accounts'), updatedAccs);
 
-          const newAuditRef = db.ref('auditLogs').push();
-          newAuditRef.set({
+          const auditRef = push(ref(db, 'auditLogs'));
+          set(auditRef, {
             timestamp: new Date().toLocaleString('id-ID'),
             user: currentUser.name,
             action: `Membuat transaksi ${trxType} ${newTrxId} sebesar ${formatIDR(grossAmount)}`,
@@ -872,16 +863,8 @@
         setIsModalTrxOpen(false);
         setEditingTrx(null);
         setFormData({ 
-          category: '', 
-          customCategory: '', 
-          activity: '', 
-          customActivity: '', 
-          description: '', 
-          accountId: '101', 
-          amount: '', 
-          recipient: '', 
-          taxType: 'Tidak Ada', 
-          taxPercent: 0 
+          category: '', customCategory: '', activity: '', customActivity: '', 
+          description: '', accountId: '101', amount: '', recipient: '', taxType: 'Tidak Ada', taxPercent: 0 
         });
       };
 
@@ -925,9 +908,10 @@
           return;
         }
         if (!editingBudget) return;
+        const { db, ref, set } = window.FirebaseDB;
         const updated = budgetItems.map(item => item.id === editingBudget.id ? { ...item, budget: Number(budgetForm.budget) } : item);
         setBudgetItems(updated);
-        db.ref('budgetItems').set(updated);
+        set(ref(db, 'budgetItems'), updated);
         setIsModalBudgetOpen(false);
         setEditingBudget(null);
         showToast('📊 Pagu Anggaran berhasil diperbarui!');
@@ -940,9 +924,10 @@
           return;
         }
         if (!editingAccount) return;
+        const { db, ref, set } = window.FirebaseDB;
         const updated = accounts.map(acc => acc.id === editingAccount.id ? { ...acc, name: accountForm.name, balance: Number(accountForm.balance) } : acc);
         setAccounts(updated);
-        db.ref('accounts').set(updated);
+        set(ref(db, 'accounts'), updated);
         setIsModalAccountOpen(false);
         setEditingAccount(null);
         showToast('🏦 Saldo/Nama Rekening berhasil diperbarui!');
@@ -981,7 +966,7 @@
 
                   <div className="bg-emerald-900/10 backdrop-blur-3xl rounded-2xl p-4 border border-emerald-400/25 space-y-1.5">
                     <div className="flex items-center gap-2 text-emerald-300 font-bold text-xs">
-                      <Icon name="shield-check" className="w-4 h-4 text-emerald-400" />
+                      <i data-lucide="shield-check" className="w-4 h-4 text-emerald-400"></i>
                       <span>Crystal Clear Security</span>
                     </div>
                     <p className="text-[11px] text-emerald-100/70 leading-relaxed">
@@ -1000,7 +985,7 @@
                 <div className="max-w-md w-full mx-auto space-y-6">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 text-emerald-400 font-bold text-xl">
-                      <Icon name="log-in" className="w-5 h-5" />
+                      <i data-lucide="log-in" className="w-5 h-5"></i>
                       <h2>Masuk ke Sistem</h2>
                     </div>
                     <p className="text-xs text-slate-400">Pilih role hak akses dan masukkan kredensial sandi Anda.</p>
@@ -1009,7 +994,7 @@
                   <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs">
                     {loginError && (
                       <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 flex items-center gap-2">
-                        <Icon name="alert-circle" className="w-4 h-4 shrink-0" />
+                        <i data-lucide="alert-circle" className="w-4 h-4 shrink-0"></i>
                         <span>{loginError}</span>
                       </div>
                     )}
@@ -1028,7 +1013,7 @@
                             </option>
                           ))}
                         </select>
-                        <Icon name="chevron-down" className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
+                        <i data-lucide="chevron-down" className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none"></i>
                       </div>
                       {currentRoleInfo && (
                         <p className="text-[11px] text-emerald-400/90 mt-1.5 flex items-start gap-1 font-medium">
@@ -1059,22 +1044,15 @@
                         placeholder="Masukkan sandi khusus role ini..."
                         required
                       />
-                      <p className="text-[10px] text-slate-400 mt-1 italic">
-                        *Setiap role memiliki sandi verifikasi yang berbeda demi keamanan sistem.
-                      </p>
                     </div>
 
                     <button
                       type="submit"
                       className="w-full bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 transition transform active:scale-[0.99] text-sm mt-2 border border-emerald-400/40 backdrop-blur-xl"
                     >
-                      <Icon name="shield-check" className="w-4 h-4" /> Masuk SIKUDES Cloud
+                      <i data-lucide="shield-check" className="w-4 h-4"></i> Masuk SIKUDES Cloud
                     </button>
                   </form>
-
-                  <div className="pt-4 border-t border-white/10 text-center text-[11px] text-slate-400">
-                    Lupa sandi atau pendaftaran akun baru? Hubungi <span className="text-emerald-400 font-bold hover:underline cursor-pointer">Administrator Desa</span>.
-                  </div>
                 </div>
               </div>
             </div>
@@ -1088,7 +1066,7 @@
           <div className="absolute top-0 left-1/4 w-[700px] h-[700px] bg-emerald-500/10 rounded-full blur-[180px] pointer-events-none"></div>
           <div className="absolute bottom-10 right-10 w-[600px] h-[600px] bg-teal-500/10 rounded-full blur-[180px] pointer-events-none"></div>
 
-          {/* HEADER NAVBAR */}
+          {/* NAVBAR */}
           <header className="sticky top-0 z-35 border-b border-white/15 bg-white/[0.02] backdrop-blur-[35px] px-4 py-3 shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
             <div className="max-w-7xl mx-auto flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -1110,27 +1088,18 @@
 
               <div className="flex items-center gap-3">
                 <div className="hidden sm:flex items-center gap-2 bg-white/[0.03] backdrop-blur-3xl px-3 py-1.5 rounded-xl border border-white/15 text-xs shadow-inner">
-                  <Icon name="user-check" className="w-4 h-4 text-emerald-400" />
+                  <i data-lucide="user-check" className="w-4 h-4 text-emerald-400"></i>
                   <div className="text-left">
                     <p className="font-bold text-slate-100 leading-tight">{currentUser.name}</p>
                     <p className="text-[10px] text-emerald-400 font-semibold">{currentUser.roleName}</p>
                   </div>
                 </div>
 
-                <button 
-                  onClick={toggleTheme}
-                  className="p-2 rounded-xl border border-white/15 bg-white/[0.03] hover:bg-white/[0.08] transition text-slate-300 backdrop-blur-3xl"
-                  title="Ganti Tema"
-                >
-                  {theme === 'light' ? <Icon name="moon" className="w-4 h-4" /> : <Icon name="sun" className="w-4 h-4 text-amber-400" />}
-                </button>
-
                 <button
                   onClick={handleLogout}
                   className="p-2 rounded-xl bg-rose-950/30 backdrop-blur-3xl text-rose-300 border border-rose-500/30 hover:bg-rose-900/40 transition flex items-center gap-1.5 text-xs font-bold shadow-lg"
-                  title="Keluar dari Akun"
                 >
-                  <Icon name="log-out" className="w-4 h-4" /> <span className="hidden md:inline">Keluar</span>
+                  <i data-lucide="log-out" className="w-4 h-4"></i> <span className="hidden md:inline">Keluar</span>
                 </button>
               </div>
             </div>
@@ -1138,7 +1107,7 @@
 
           {notificationMsg && (
             <div className="fixed bottom-5 right-5 z-50 bg-slate-950/70 backdrop-blur-3xl text-white px-4 py-3 rounded-xl shadow-2xl border border-white/25 flex items-center gap-3">
-              <Icon name="bell" className="w-5 h-5 text-emerald-400" />
+              <i data-lucide="bell" className="w-5 h-5 text-emerald-400"></i>
               <span className="text-xs font-medium">{notificationMsg}</span>
             </div>
           )}
@@ -1147,7 +1116,7 @@
           <div className="max-w-7xl mx-auto px-4 py-6 flex flex-col md:flex-row gap-6 relative z-10 items-start">
             
             {/* SIDEBAR */}
-            <aside className="w-full md:w-64 shrink-0 sticky top-20 h-[calc(100vh-6rem)] overflow-y-auto pr-1 custom-scrollbar space-y-1">
+            <aside className="w-full md:w-64 shrink-0 sticky top-20 h-[calc(100vh-6rem)] overflow-y-auto pr-1 space-y-1">
               <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-3 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)]">
                 <p className="text-[10px] uppercase font-bold text-slate-400 px-3 py-2 tracking-wider">Menu Utama</p>
                 <nav className="space-y-1">
@@ -1174,7 +1143,7 @@
                         }`}
                       >
                         <div className="flex items-center gap-2.5">
-                          <Icon name={item.icon} className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                          <i data-lucide={item.icon} className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400'}`}></i>
                           <span>{item.label}</span>
                         </div>
                       </button>
@@ -1187,7 +1156,7 @@
                   <div className="space-y-2 px-1">
                     {userPermissions.canImport && (
                       <label className="w-full flex items-center justify-center gap-2 bg-blue-950/20 backdrop-blur-3xl text-blue-300 border border-blue-500/30 py-2 rounded-xl text-xs font-bold hover:bg-blue-900/30 cursor-pointer transition shadow-inner">
-                        <Icon name="upload" className="w-3.5 h-3.5" /> Import Excel (CSV)
+                        <i data-lucide="upload" className="w-3.5 h-3.5"></i> Import Excel (CSV)
                         <input type="file" accept=".csv, .txt" onChange={handleFileUpload} className="hidden" />
                       </label>
                     )}
@@ -1197,7 +1166,7 @@
                         onClick={handleResetTransactions}
                         className="w-full flex items-center justify-center gap-2 bg-red-950/20 backdrop-blur-3xl text-red-300 border border-red-500/30 py-2 rounded-xl text-xs font-bold hover:bg-red-900/30 transition shadow-inner"
                       >
-                        <Icon name="trash-2" className="w-3.5 h-3.5" /> Reset Data Cloud
+                        <i data-lucide="trash-2" className="w-3.5 h-3.5"></i> Reset Data Cloud
                       </button>
                     )}
 
@@ -1207,13 +1176,13 @@
                           onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setIsModalTrxOpen(true); }}
                           className="w-full flex items-center justify-center gap-2 bg-emerald-950/20 backdrop-blur-3xl text-emerald-300 border border-emerald-500/30 py-2 rounded-xl text-xs font-bold hover:bg-emerald-900/30 transition shadow-inner"
                         >
-                          <Icon name="plus" className="w-3.5 h-3.5" /> Tambah Pendapatan
+                          <i data-lucide="plus" className="w-3.5 h-3.5"></i> Tambah Pendapatan
                         </button>
                         <button
                           onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setIsModalTrxOpen(true); }}
                           className="w-full flex items-center justify-center gap-2 bg-rose-950/20 backdrop-blur-3xl text-rose-300 border border-rose-500/30 py-2 rounded-xl text-xs font-bold hover:bg-rose-900/30 transition shadow-inner"
                         >
-                          <Icon name="plus" className="w-3.5 h-3.5" /> Catat Belanja
+                          <i data-lucide="plus" className="w-3.5 h-3.5"></i> Catat Belanja
                         </button>
                       </>
                     )}
@@ -1222,12 +1191,13 @@
               </div>
             </aside>
 
-            {/* CONTENT CONTENT */}
+            {/* MAIN CONTENT AREA */}
             <main className="flex-1 min-w-0 space-y-6">
 
               {activeMenu === 'dashboard' && (
                 <div className="space-y-6">
                   
+                  {/* HERO */}
                   <div className="bg-gradient-to-r from-emerald-950/30 via-emerald-900/20 to-teal-950/30 backdrop-blur-[40px] rounded-3xl p-6 text-white shadow-2xl border border-emerald-500/30 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
                     <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-emerald-400/15 rounded-full blur-2xl pointer-events-none"></div>
                     <div>
@@ -1247,11 +1217,12 @@
                         onClick={() => { setMasterForm(villageProfile); setIsModalMasterOpen(true); }}
                         className="bg-white/10 hover:bg-white/20 backdrop-blur-3xl text-white border border-white/25 px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shrink-0 shadow-lg"
                       >
-                        <Icon name="edit" className="w-4 h-4" /> Edit Profil Desa
+                        <i data-lucide="edit" className="w-4 h-4"></i> Edit Profil Desa
                       </button>
                     )}
                   </div>
 
+                  {/* CARDS */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-4 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] relative overflow-hidden">
                       <div className="flex justify-between items-start">
@@ -1260,11 +1231,11 @@
                           <p className="text-xl font-black text-emerald-400 mt-1">{formatIDR(financialSummary.approvedRevenue)}</p>
                         </div>
                         <div className="p-2.5 rounded-xl bg-emerald-950/40 text-emerald-400 border border-emerald-500/30 backdrop-blur-3xl">
-                          <Icon name="arrow-down-left" className="w-5 h-5" />
+                          <i data-lucide="arrow-down-left" className="w-5 h-5"></i>
                         </div>
                       </div>
                       <div className="mt-3 flex items-center gap-1 text-[10px] font-bold text-emerald-300 bg-emerald-950/20 px-2 py-1 rounded-lg w-fit border border-emerald-500/20 backdrop-blur">
-                        <Icon name="trending-up" className="w-3 h-3" /> Transaksi Terverifikasi
+                        <i data-lucide="trending-up" className="w-3 h-3"></i> Transaksi Terverifikasi
                       </div>
                     </div>
 
@@ -1275,11 +1246,11 @@
                           <p className="text-xl font-black text-rose-400 mt-1">{formatIDR(financialSummary.approvedExpenditure)}</p>
                         </div>
                         <div className="p-2.5 rounded-xl bg-rose-950/40 text-rose-400 border border-rose-500/30 backdrop-blur-3xl">
-                          <Icon name="arrow-up-right" className="w-5 h-5" />
+                          <i data-lucide="arrow-up-right" className="w-5 h-5"></i>
                         </div>
                       </div>
                       <div className="mt-3 flex items-center gap-1 text-[10px] font-bold text-rose-300 bg-rose-950/20 px-2 py-1 rounded-lg w-fit border border-rose-500/20 backdrop-blur">
-                        <Icon name="trending-down" className="w-3 h-3" /> Total Pengeluaran Kegiatan
+                        <i data-lucide="trending-down" className="w-3 h-3"></i> Total Pengeluaran Kegiatan
                       </div>
                     </div>
 
@@ -1290,7 +1261,7 @@
                           <p className="text-xl font-black text-blue-400 mt-1">{financialSummary.absorptionRate}%</p>
                         </div>
                         <div className="p-2.5 rounded-xl bg-blue-950/40 text-blue-400 border border-blue-500/30 backdrop-blur-3xl">
-                          <Icon name="bar-chart-3" className="w-5 h-5" />
+                          <i data-lucide="bar-chart-3" className="w-5 h-5"></i>
                         </div>
                       </div>
                       <div className="mt-3 w-full bg-white/10 h-2 rounded-full overflow-hidden border border-white/10">
@@ -1310,7 +1281,7 @@
                           </p>
                         </div>
                         <div className="p-2.5 rounded-xl bg-white/10 backdrop-blur-3xl text-white border border-white/20">
-                          <Icon name="wallet" className="w-5 h-5" />
+                          <i data-lucide="wallet" className="w-5 h-5"></i>
                         </div>
                       </div>
                       <p className="text-[10px] text-emerald-200/80 mt-2 italic font-medium">
@@ -1319,12 +1290,12 @@
                     </div>
                   </div>
 
-                  {/* GRAFIK PEMASUKAN VS PENGELUARAN */}
+                  {/* GRAFIK */}
                   <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-3xl p-6 text-slate-100 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-white/15">
                       <div className="flex items-center gap-3">
                         <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 backdrop-blur-3xl">
-                          <Icon name="line-chart" className="w-5 h-5" />
+                          <i data-lucide="line-chart" className="w-5 h-5"></i>
                         </div>
                         <div>
                           <h3 className="font-extrabold text-base tracking-tight text-white">Pemasukan vs Pengeluaran</h3>
@@ -1355,17 +1326,15 @@
                           const chartWidth = 700;
                           const stepX = chartWidth / (months.length - 1);
 
-                          const pointsRev = data.map((d, i) => {
-                            const x = i * stepX;
-                            const y = chartHeight - (d.revenue / maxVal) * chartHeight;
-                            return { x, y };
-                          });
+                          const pointsRev = data.map((d, i) => ({
+                            x: i * stepX,
+                            y: chartHeight - (d.revenue / maxVal) * chartHeight
+                          }));
 
-                          const pointsExp = data.map((d, i) => {
-                            const x = i * stepX;
-                            const y = chartHeight - (d.expense / maxVal) * chartHeight;
-                            return { x, y };
-                          });
+                          const pointsExp = data.map((d, i) => ({
+                            x: i * stepX,
+                            y: chartHeight - (d.expense / maxVal) * chartHeight
+                          }));
 
                           const makeSmoothPath = (pts) => {
                             if (pts.length === 0) return '';
@@ -1447,11 +1416,12 @@
                     </div>
                   </div>
 
+                  {/* BREAKDOWNS */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-4">
                       <div className="flex justify-between items-center pb-3 border-b border-white/15">
                         <div className="flex items-center gap-2">
-                          <Icon name="activity" className="w-5 h-5 text-emerald-400" />
+                          <i data-lucide="activity" className="w-5 h-5 text-emerald-400"></i>
                           <h3 className="font-bold text-sm text-slate-100">Penyerapan Anggaran per Jenis Kegiatan</h3>
                         </div>
                         <span className="text-[10px] bg-white/[0.04] backdrop-blur-3xl px-2 py-1 rounded font-bold text-slate-300 border border-white/15">
@@ -1474,8 +1444,8 @@
                                 </div>
                                 
                                 <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden flex border border-white/10">
-                                  <div className="bg-emerald-500 h-full" style={{ width: `${100 - Number(pctOut)}%` }} title="Penerimaan"></div>
-                                  <div className="bg-rose-500 h-full" style={{ width: `${pctOut}%` }} title="Pengeluaran"></div>
+                                  <div className="bg-emerald-500 h-full" style={{ width: `${100 - Number(pctOut)}%` }}></div>
+                                  <div className="bg-rose-500 h-full" style={{ width: `${pctOut}%` }}></div>
                                 </div>
 
                                 <div className="flex justify-between items-center text-[10px] text-slate-400">
@@ -1492,7 +1462,7 @@
                     <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-4">
                       <div className="flex justify-between items-center pb-3 border-b border-white/15">
                         <div className="flex items-center gap-2">
-                          <Icon name="pie-chart" className="w-5 h-5 text-emerald-400" />
+                          <i data-lucide="pie-chart" className="w-5 h-5 text-emerald-400"></i>
                           <h3 className="font-bold text-sm text-slate-100">Komposisi Transaksi per Kategori</h3>
                         </div>
                         <span className="text-[10px] bg-emerald-950/40 backdrop-blur-3xl text-emerald-300 px-2 py-1 rounded font-bold border border-emerald-500/30">
@@ -1504,26 +1474,77 @@
                         {categoryBreakdown.length === 0 ? (
                           <p className="text-xs text-slate-400 italic text-center py-6">Belum ada kategori transaksi</p>
                         ) : (
-                          categoryBreakdown.map((cat, idx) => {
-                            return (
-                              <div key={idx} className="p-3 rounded-xl bg-white/[0.04] backdrop-blur-3xl border border-white/15 shadow-inner space-y-2">
-                                <div className="flex justify-between items-center text-xs">
-                                  <span className="font-bold text-slate-100">{cat.name}</span>
-                                  <div className="text-right">
-                                    <span className="text-emerald-400 font-bold block">+{formatIDR(cat.totalIn)}</span>
-                                    <span className="text-rose-400 font-bold block">-{formatIDR(cat.totalOut)}</span>
-                                  </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 gap-2 text-[10px] font-semibold pt-1 border-t border-white/10">
-                                  <span className="text-emerald-400">Masuk: {formatIDR(cat.totalIn)}</span>
-                                  <span className="text-rose-400 text-right">Keluar: {formatIDR(cat.totalOut)}</span>
+                          categoryBreakdown.map((cat, idx) => (
+                            <div key={idx} className="p-3 rounded-xl bg-white/[0.04] backdrop-blur-3xl border border-white/15 shadow-inner space-y-2">
+                              <div className="flex justify-between items-center text-xs">
+                                <span className="font-bold text-slate-100">{cat.name}</span>
+                                <div className="text-right">
+                                  <span className="text-emerald-400 font-bold block">+{formatIDR(cat.totalIn)}</span>
+                                  <span className="text-rose-400 font-bold block">-{formatIDR(cat.totalOut)}</span>
                                 </div>
                               </div>
-                            );
-                          })
+
+                              <div className="grid grid-cols-2 gap-2 text-[10px] font-semibold pt-1 border-t border-white/10">
+                                <span className="text-emerald-400">Masuk: {formatIDR(cat.totalIn)}</span>
+                                <span className="text-rose-400 text-right">Keluar: {formatIDR(cat.totalOut)}</span>
+                              </div>
+                            </div>
+                          ))
                         )}
                       </div>
+                    </div>
+                  </div>
+
+                  {/* SEKSI AKTIVITAS TRANSAKSI TERAKHIR */}
+                  <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-3xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-4">
+                    <div className="flex justify-between items-center pb-3 border-b border-white/15">
+                      <div>
+                        <h3 className="text-base font-extrabold text-slate-100 tracking-tight">Aktivitas Transaksi Terakhir</h3>
+                        <p className="text-xs text-slate-400">5 riwayat transaksi terbaru yang tersimpan di Cloud</p>
+                      </div>
+                      <button
+                        onClick={() => setActiveMenu('bku')}
+                        className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition"
+                      >
+                        Lihat Semua BKU <i data-lucide="chevron-right" className="w-4 h-4"></i>
+                      </button>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300 font-semibold">
+                            <th className="p-3">Tanggal</th>
+                            <th className="p-3">Kategori</th>
+                            <th className="p-3">Kegiatan Terkait</th>
+                            <th className="p-3">Uraian</th>
+                            <th className="p-3 text-right">Jumlah (Rp)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/10">
+                          {recentTransactions.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="p-6 text-center text-slate-400 italic">Belum ada riwayat transaksi tercatat</td>
+                            </tr>
+                          ) : (
+                            recentTransactions.map((t, idx) => {
+                              const typeStr = (t.type || '').toLowerCase();
+                              const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+                              return (
+                                <tr key={t.idKey || idx} className="hover:bg-white/[0.05] transition">
+                                  <td className="p-3 text-slate-400 whitespace-nowrap">{t.date}</td>
+                                  <td className="p-3 font-bold text-slate-200">{t.category}</td>
+                                  <td className="p-3 font-semibold text-emerald-400">{t.activity || '-'}</td>
+                                  <td className="p-3 text-slate-300 max-w-xs truncate">{t.description}</td>
+                                  <td className={`p-3 text-right font-bold whitespace-nowrap ${isInc ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {isInc ? '+' : '-'}{formatIDR(t.amount)}
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
 
@@ -1542,7 +1563,7 @@
                         onClick={() => { setMasterForm(villageProfile); setIsModalMasterOpen(true); }}
                         className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
                       >
-                        <Icon name="edit" className="w-4 h-4" /> Edit Data Master
+                        <i data-lucide="edit" className="w-4 h-4"></i> Edit Data Master
                       </button>
                     )}
                   </div>
@@ -1592,7 +1613,7 @@
                                   onClick={() => { setEditingBudget(item); setBudgetForm({ budget: item.budget }); setIsModalBudgetOpen(true); }}
                                   className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
                                 >
-                                  <Icon name="edit" className="w-3.5 h-3.5" /> Edit
+                                  <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit
                                 </button>
                               </td>
                             )}
@@ -1616,7 +1637,7 @@
                         onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setIsModalTrxOpen(true); }}
                         className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
                       >
-                        <Icon name="plus" className="w-4 h-4" /> Catat Pendapatan
+                        <i data-lucide="plus" className="w-4 h-4"></i> Catat Pendapatan
                       </button>
                     )}
                   </div>
@@ -1651,7 +1672,7 @@
                                     onClick={() => openEditTransaction(t)}
                                     className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
                                   >
-                                    <Icon name="edit" className="w-3.5 h-3.5" /> Edit
+                                    <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit
                                   </button>
                                 </td>
                               )}
@@ -1675,7 +1696,7 @@
                         onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setIsModalTrxOpen(true); }}
                         className="bg-rose-600/70 hover:bg-rose-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-rose-400/30"
                       >
-                        <Icon name="plus" className="w-4 h-4" /> Catat Belanja
+                        <i data-lucide="plus" className="w-4 h-4"></i> Catat Belanja
                       </button>
                     )}
                   </div>
@@ -1710,7 +1731,7 @@
                                     onClick={() => openEditTransaction(t)}
                                     className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
                                   >
-                                    <Icon name="edit" className="w-3.5 h-3.5" /> Edit
+                                    <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit
                                   </button>
                                 </td>
                               )}
@@ -1762,7 +1783,7 @@
                                       onClick={() => openEditTransaction(t)}
                                       className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2 py-1 rounded font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
                                     >
-                                      <Icon name="edit" className="w-3 h-3" /> Edit
+                                      <i data-lucide="edit" className="w-3 h-3"></i> Edit
                                     </button>
                                   </td>
                                 )}
@@ -1776,14 +1797,13 @@
                 </div>
               )}
 
-              {/* MENU LAPORAN KEUANGAN */}
               {activeMenu === 'reports' && (
                 <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-3xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
                   
                   <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/15">
                     <div>
                       <h2 className="text-xl font-black text-slate-100 flex items-center gap-2">
-                        <Icon name="file-text" className="w-5 h-5 text-emerald-400" /> Pusat Laporan Rekap & Detail Uraian (Jan - Des)
+                        <i data-lucide="file-text" className="w-5 h-5 text-emerald-400"></i> Pusat Laporan Rekap & Detail Uraian (Jan - Des)
                       </h2>
                       <p className="text-xs text-slate-400">Data terurut kronologis dari bulan Januari hingga Desember, serta tanggal 1 sampai 31 paling atas</p>
                     </div>
@@ -1793,13 +1813,13 @@
                         onClick={handlePrintReport}
                         className="bg-emerald-600/80 hover:bg-emerald-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg border border-emerald-400/40 transition"
                       >
-                        <Icon name="printer" className="w-4 h-4" /> Cetak Laporan (PDF)
+                        <i data-lucide="printer" className="w-4 h-4"></i> Cetak Laporan (PDF)
                       </button>
                       <button
                         onClick={handleDownloadReportCSV}
                         className="bg-blue-600/80 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg border border-blue-400/40 transition"
                       >
-                        <Icon name="download" className="w-4 h-4" /> Unduh CSV
+                        <i data-lucide="download" className="w-4 h-4"></i> Unduh CSV
                       </button>
                     </div>
                   </div>
@@ -1851,7 +1871,7 @@
                     )}
                   </div>
 
-                  {/* AREA CETAK RESMI */}
+                  {/* AREA PRATINJAU CETAK */}
                   <div id="printable-report-area" className="bg-white text-slate-900 p-8 rounded-2xl shadow-2xl space-y-8 print:p-0 print:shadow-none">
                     
                     <div className="text-center border-b-2 border-slate-900 pb-4 space-y-1">
@@ -2099,7 +2119,7 @@
                               onClick={() => { setEditingAccount(a); setAccountForm({ name: a.name, balance: a.balance }); setIsModalAccountOpen(true); }}
                               className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg text-xs font-bold flex items-center gap-1 backdrop-blur-3xl"
                             >
-                              <Icon name="edit" className="w-3 h-3" /> Edit
+                              <i data-lucide="edit" className="w-3 h-3"></i> Edit
                             </button>
                           )}
                         </div>
@@ -2150,7 +2170,7 @@
               <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-white/25 space-y-5">
                 <div className="flex justify-between items-center border-b border-white/15 pb-3">
                   <h3 className="font-bold text-base text-slate-100">{editingTrx ? 'Edit Transaksi' : `Pencatatan Transaksi ${trxType}`} (Cloud)</h3>
-                  <button onClick={() => setIsModalTrxOpen(false)} className="text-slate-400 hover:text-white"><Icon name="x-circle" className="w-5 h-5" /></button>
+                  <button onClick={() => setIsModalTrxOpen(false)} className="text-slate-400 hover:text-white"><i data-lucide="x-circle" className="w-5 h-5"></i></button>
                 </div>
                 <form onSubmit={handleSaveTransaction} className="space-y-4 text-xs">
                   <div>
@@ -2218,7 +2238,6 @@
                           autoFocus
                           required
                         />
-                        <p className="text-[10px] text-slate-400 italic">*Ketik nama kegiatan baru dengan lengkap tanpa terputus.</p>
                       </div>
                     )}
                   </div>
@@ -2272,7 +2291,7 @@
               <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-white/25 space-y-5">
                 <div className="flex justify-between items-center border-b border-white/15 pb-3">
                   <h3 className="font-bold text-base text-slate-100">Edit Data Master & Pejabat Desa</h3>
-                  <button onClick={() => setIsModalMasterOpen(false)} className="text-slate-400 hover:text-white"><Icon name="x-circle" className="w-5 h-5" /></button>
+                  <button onClick={() => setIsModalMasterOpen(false)} className="text-slate-400 hover:text-white"><i data-lucide="x-circle" className="w-5 h-5"></i></button>
                 </div>
                 <form onSubmit={handleSaveMaster} className="space-y-3 text-xs">
                   <div>
@@ -2353,12 +2372,12 @@
             </div>
           )}
 
-          {/* MODAL ANIMASI UPLOAD */}
+          {/* MODAL UPLOAD ANIMASI */}
           {isUploading && (
             <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
               <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-md w-full p-6 shadow-2xl border border-white/25 space-y-6 text-center">
                 <div className="w-16 h-16 bg-emerald-950/80 text-emerald-400 rounded-full flex items-center justify-center mx-auto animate-pulse border border-emerald-400/40 shadow-inner">
-                  <Icon name="refresh-cw" className="w-8 h-8 animate-spin" />
+                  <i data-lucide="refresh-cw" className="w-8 h-8 animate-spin"></i>
                 </div>
                 <div>
                   <h3 className="text-lg font-black text-slate-100">Sedang Mengimport Data</h3>
@@ -2373,24 +2392,6 @@
                     <div className="bg-emerald-500 h-full rounded-full transition-all duration-500 shadow-[0_0_12px_#10b981]" style={{ width: `${uploadProgressPct}%` }}></div>
                   </div>
                 </div>
-                <div className="space-y-2 text-left bg-white/[0.04] backdrop-blur-3xl p-4 rounded-2xl text-xs border border-white/15 shadow-inner">
-                  <div className={`flex items-center gap-2.5 ${uploadStep >= 1 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
-                    {uploadStep > 1 ? <Icon name="check-circle-2" className="w-4 h-4 text-emerald-400" /> : <Icon name="clock" className="w-4 h-4" />}
-                    <span>1. Membaca & Memindai File CSV</span>
-                  </div>
-                  <div className={`flex items-center gap-2.5 ${uploadStep >= 2 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
-                    {uploadStep > 2 ? <Icon name="check-circle-2" className="w-4 h-4 text-emerald-400" /> : <Icon name="clock" className="w-4 h-4" />}
-                    <span>2. Mengurai Baris & Teks Transaksi</span>
-                  </div>
-                  <div className={`flex items-center gap-2.5 ${uploadStep >= 3 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
-                    {uploadStep > 3 ? <Icon name="check-circle-2" className="w-4 h-4 text-emerald-400" /> : <Icon name="clock" className="w-4 h-4" />}
-                    <span>3. Memvalidasi Nominal & Kategori</span>
-                  </div>
-                  <div className={`flex items-center gap-2.5 ${uploadStep >= 4 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
-                    {uploadStep > 4 ? <Icon name="check-circle-2" className="w-4 h-4 text-emerald-400" /> : <Icon name="clock" className="w-4 h-4" />}
-                    <span>4. Sinkronisasi ke Firebase Cloud Database</span>
-                  </div>
-                </div>
               </div>
             </div>
           )}
@@ -2399,8 +2400,7 @@
       );
     }
 
-    const rootElement = document.getElementById('root');
-    const root = ReactDOM.createRoot(rootElement);
+    const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
 </body>
