@@ -18,6 +18,9 @@
   <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
+  <!-- SheetJS CDN for XLSX Export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
   <style>
     /* Custom Scrollbar for Glassmorphism UI */
     ::-webkit-scrollbar {
@@ -207,8 +210,16 @@
         { id: '4.1', code: '4.1', category: 'Pendapatan', name: 'Pendapatan Asli Desa (PAD)', budget: 100000000, realization: 0 },
         { id: '4.2', code: '4.2', category: 'Pendapatan', name: 'Dana Desa (DD)', budget: 800000000, realization: 0 },
         { id: '4.3', code: '4.3', category: 'Pendapatan', name: 'Alokasi Dana Desa (ADD)', budget: 400000000, realization: 0 },
-        { id: '5.1', code: '5.1', category: 'Belanja', name: 'Bidang Penyelenggaraan Pemerintahan', budget: 500000000, realization: 0 },
-        { id: '5.2', code: '5.2', category: 'Belanja', name: 'Bidang Pembangunan Desa', budget: 600000000, realization: 0 }
+        { id: '4.4', code: '4.4', category: 'Pendapatan', name: 'Bagi Hasil Pajak (BHP)', budget: 50000050, realization: 0 },
+        { id: '4.5', code: '4.5', category: 'Pendapatan', name: 'Pinjaman dan dana tak terduga', budget: 0, realization: 0 },
+        { id: '4.7', code: '4.7', category: 'Pendapatan', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
+        
+        { id: '5.1', code: '5.1', category: 'Belanja', name: 'Pendapatan Asli Desa (PAD)', budget: 100000000, realization: 0 },
+        { id: '5.2', code: '5.2', category: 'Belanja', name: 'Alokasi Dana Desa (ADD)', budget: 400000000, realization: 0 },
+        { id: '5.3', code: '5.3', category: 'Belanja', name: 'Dana Desa (DD)', budget: 800000000, realization: 0 },
+        { id: '5.4', code: '5.4', category: 'Belanja', name: 'Bagi Hasil Pajak (BHP)', budget: 50000000, realization: 0 },
+        { id: '5.5', code: '5.5', category: 'Belanja', name: 'Pinjaman dan Dana Tak terduga', budget: 0, realization: 0 },
+        { id: '5.7', code: '5.7', category: 'Belanja', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
       ]);
 
       const [transactions, setTransactions] = useState([]);
@@ -220,6 +231,19 @@
       const [reportType, setReportType] = useState('bku');
       const [reportCategoryFilter, setReportCategoryFilter] = useState('Semua');
       const [reportActivityFilter, setReportActivityFilter] = useState('Semua');
+      // State Filter untuk Menu Penerimaan & Pengeluaran
+      const [revenueCategoryFilter, setRevenueCategoryFilter] = useState('Semua');
+      const [revenueActivityFilter, setRevenueActivityFilter] = useState('Semua');
+      const [expenditureCategoryFilter, setExpenditureCategoryFilter] = useState('Semua');
+      const [expenditureActivityFilter, setExpenditureActivityFilter] = useState('Semua');
+      // State Filter untuk Menu Buku Kas Umum (BKU)
+      const [bkuCategoryFilter, setBkuCategoryFilter] = useState('Semua');
+      const [bkuActivityFilter, setBkuActivityFilter] = useState('Semua');
+      // State Pagination (Maksimal 10 data per halaman)
+      const [revenuePage, setRevenuePage] = useState(1);
+      const [expenditurePage, setExpenditurePage] = useState(1);
+      const [bkuPage, setBkuPage] = useState(1);
+      const itemsPerPage = 10;
 
       const [isModalTrxOpen, setIsModalTrxOpen] = useState(false);
       const [trxType, setTrxType] = useState('Pendapatan');
@@ -253,6 +277,10 @@
           window.lucide.createIcons();
         }
       });
+      // Tambahkan blok ini di bawahnya:
+      useEffect(() => {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }, [activeMenu]);
 
       useEffect(() => {
         const interval = setInterval(() => {
@@ -338,6 +366,7 @@
 
         setCurrentUser(userSession);
         setIsAuthenticated(true);
+        setActiveMenu('dashboard'); // <-- Tambahan agar otomatis membuka dashboard saat login
         setLoginPassword('');
         showToast(`Selamat datang kembali, ${userSession.name}!`);
       };
@@ -505,45 +534,159 @@
 
       const handlePrintReport = () => window.print();
 
-      const handleDownloadReportCSV = () => {
-        let csvContent = "data:text/csv;charset=utf-8,";
+      const handleDownloadReportXLSX = () => {
+        if (!window.XLSX) {
+          showToast('⚠️ Library Excel belum dimuat dengan sempurna.');
+          return;
+        }
+
+        const wb = XLSX.utils.book_new();
+        const dataRows = [];
+
+        // Header KOP Surat Laporan Desa
+        dataRows.push([`PEMERINTAH KABUPATEN ${villageProfile.regency.toUpperCase()}`]);
+        dataRows.push([villageProfile.district.toUpperCase()]);
+        dataRows.push([`PEMERINTAH ${villageProfile.name.toUpperCase()}`]);
         
+        let reportTitle = '';
+        if (reportType === 'bku') reportTitle = 'LAPORAN BUKU KAS UMUM (BKU)';
+        else if (reportType === 'category') reportTitle = 'LAPORAN REKAPITULASI & DETAIL URAIAN PER KATEGORI APBDES';
+        else if (reportType === 'activity') reportTitle = 'LAPORAN REKAPITULASI & DETAIL URAIAN PER JENIS KEGIATAN DESA';
+
+        dataRows.push([reportTitle]);
+        dataRows.push([`Tahun Anggaran ${selectedYear}`]);
+        dataRows.push([]); // Baris Kosong
+
         if (reportType === 'bku') {
-          csvContent += "Tanggal,Jenis,Kategori,Kegiatan,Uraian,Nominal (Rp)\r\n";
-          transactions.forEach(t => {
-            const row = [t.date, t.type, `"${t.category}"`, `"${t.activity || '-'}"`, `"${t.description}"`, t.amount];
-            csvContent += row.join(",") + "\r\n";
+          dataRows.push(['Tanggal', 'Kegiatan Terkait', 'Uraian / Keterangan', 'Penerimaan (Rp)', 'Pengeluaran (Rp)', 'Saldo (Rp)']);
+          let runningBal = 0;
+          const sortedTrx = sortTransactionsChronologically(transactions);
+          
+          sortedTrx.forEach(t => {
+            const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+            const amt = Number(t.amount || 0);
+            runningBal += isInc ? amt : -amt;
+
+            dataRows.push([
+              t.date,
+              t.activity || '-',
+              t.description,
+              isInc ? amt : 0,
+              !isInc ? amt : 0,
+              runningBal
+            ]);
           });
         } else if (reportType === 'category') {
-          csvContent += "Tanggal,Kategori APBDes,Uraian Transaksi,Jenis,Nominal (Rp)\r\n";
-          transactions.forEach(t => {
-            if (reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter) {
-              const row = [t.date, `"${t.category}"`, `"${t.description}"`, t.type, t.amount];
-              csvContent += row.join(",") + "\r\n";
-            }
+          // Section A: Rekapitulasi Kategori
+          dataRows.push(['A. REKAPITULASI PER KATEGORI APBDES']);
+          dataRows.push(['No', 'Kategori APBDes', 'Total Pendapatan (Rp)', 'Total Belanja (Rp)', 'Saldo / Sisa (Rp)']);
+          
+          const filteredCat = categoryBreakdown.filter(c => reportCategoryFilter === 'Semua' || c.name === reportCategoryFilter);
+          filteredCat.forEach((c, idx) => {
+            dataRows.push([
+              idx + 1,
+              c.name,
+              c.totalIn,
+              c.totalOut,
+              c.totalIn - c.totalOut
+            ]);
+          });
+
+          dataRows.push([]); // Baris Kosong
+          dataRows.push(['B. RINCIAN DETAIL TRANSAKSI & URAIAN PER KATEGORI']);
+          dataRows.push(['Tanggal', 'Kategori APBDes', 'Uraian Transaksi', 'Jenis', 'Nominal (Rp)', 'Saldo (Rp)']);
+
+          let runningBalCat = 0;
+          const sortedTrx = sortTransactionsChronologically(transactions);
+          const filteredTrx = sortedTrx.filter(t => reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter);
+
+          filteredTrx.forEach(t => {
+            const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+            const amt = Number(t.amount || 0);
+            runningBalCat += isInc ? amt : -amt;
+
+            dataRows.push([
+              t.date,
+              t.category,
+              t.description,
+              t.type,
+              isInc ? amt : -amt,
+              runningBalCat
+            ]);
           });
         } else if (reportType === 'activity') {
-          csvContent += "Tanggal,Jenis Kegiatan,Uraian Transaksi,Kategori,Penerimaan (Rp),Pengeluaran (Rp),Saldo (Rp)\r\n";
-          let runningBal = 0;
-          transactions.forEach(t => {
+          // Section A: Rekapitulasi Kegiatan
+          dataRows.push(['A. REKAPITULASI PER JENIS KEGIATAN DESA']);
+          dataRows.push(['No', 'Jenis Kegiatan Desa', 'Penerimaan (Rp)', 'Pengeluaran (Rp)', 'Saldo Bersih (Rp)']);
+          
+          const filteredAct = activityBreakdown.filter(a => reportActivityFilter === 'Semua' || a.name === reportActivityFilter);
+          filteredAct.forEach((a, idx) => {
+            dataRows.push([
+              idx + 1,
+              a.name,
+              a.totalIn,
+              a.totalOut,
+              a.net
+            ]);
+          });
+
+          dataRows.push([]); // Baris Kosong
+          dataRows.push(['B. RINCIAN DETAIL TRANSAKSI & URAIAN PER KEGIATAN']);
+          dataRows.push(['Tanggal', 'Jenis Kegiatan', 'Kategori APBDes', 'Uraian Transaksi', 'Penerimaan (Rp)', 'Pengeluaran (Rp)', 'Saldo (Rp)']);
+
+          let runningBalAct = 0;
+          const sortedTrx = sortTransactionsChronologically(transactions);
+          const filteredTrx = sortedTrx.filter(t => {
             const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
-            if (reportActivityFilter === 'Semua' || actName === reportActivityFilter) {
-              const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-              runningBal += isInc ? Number(t.amount || 0) : -Number(t.amount || 0);
-              const row = [t.date, `"${actName}"`, `"${t.description}"`, `"${t.category}"`, isInc ? t.amount : 0, !isInc ? t.amount : 0, runningBal];
-              csvContent += row.join(",") + "\r\n";
-            }
+            return reportActivityFilter === 'Semua' || actName === reportActivityFilter;
+          });
+
+          filteredTrx.forEach(t => {
+            const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+            const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+            const amt = Number(t.amount || 0);
+            runningBalAct += isInc ? amt : -amt;
+
+            dataRows.push([
+              t.date,
+              actName,
+              t.category,
+              t.description,
+              isInc ? amt : 0,
+              !isInc ? amt : 0,
+              runningBalAct
+            ]);
           });
         }
 
-        const encodedUri = encodeURI(csvContent);
-        const link = document.createElement("a");
-        link.setAttribute("href", encodedUri);
-        link.setAttribute("download", `Laporan_Detail_${reportType}_${villageProfile.name.replace(/\s+/g, '_')}_2026.csv`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        showToast('📥 Berhasil mendownload file laporan detail CSV!');
+        // Tanda Tangan Pejabat Desa
+        dataRows.push([]);
+        dataRows.push([]);
+        dataRows.push(['', '', '', 'Mengetahui,', '', `${villageProfile.regency}, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`]);
+        dataRows.push(['', '', '', `Kepala Desa ${villageProfile.name}`, '', 'Kaur Keuangan / Bendahara']);
+        dataRows.push([]);
+        dataRows.push([]);
+        dataRows.push(['', '', '', villageProfile.headOfVillage.toUpperCase(), '', villageProfile.treasurer.toUpperCase()]);
+
+        const ws = XLSX.utils.aoa_to_sheet(dataRows);
+
+        // Pengaturan Lebar Kolom Otomatis
+        ws['!cols'] = [
+          { wch: 14 },
+          { wch: 25 },
+          { wch: 25 },
+          { wch: 35 },
+          { wch: 18 },
+          { wch: 18 },
+          { wch: 18 }
+        ];
+
+        XLSX.utils.book_append_sheet(wb, ws, "Laporan Keuangan");
+        
+        const fileName = `Laporan_${reportType.toUpperCase()}_${villageProfile.name.replace(/\s+/g, '_')}_2026.xlsx`;
+        XLSX.writeFile(wb, fileName);
+
+        showToast('📊 Berhasil mendownload laporan resmi format Microsoft Excel (.xlsx)!');
       };
 
       const handleResetTransactions = async () => {
@@ -866,6 +1009,46 @@
           category: '', customCategory: '', activity: '', customActivity: '', 
           description: '', accountId: '101', amount: '', recipient: '', taxType: 'Tidak Ada', taxPercent: 0 
         });
+      };
+
+      const handleDeleteTransaction = (t) => {
+        if (!userPermissions.canEdit) {
+          showToast('⚠️ Akses Ditolak! Anda tidak memiliki izin untuk menghapus transaksi.');
+          return;
+        }
+
+        if (!confirm(`Apakah Anda yakin ingin menghapus transaksi ${t.id || t.idKey} senilai ${formatIDR(t.amount)} ini?`)) {
+          return;
+        }
+
+        const { db, ref, set, push } = window.FirebaseDB;
+        
+        // Hapus data dari Firebase berdasarkan idKey
+        const trxRef = ref(db, `transactions/${t.idKey}`);
+        set(trxRef, null);
+
+        // Kembalikan saldo rekening yang sebelumnya terpotong/bertambah
+        const updatedAccs = accounts.map(acc => {
+          if (acc.id === (t.accountId || '101')) {
+            const typeStr = (t.type || '').toLowerCase();
+            const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+            const change = isInc ? -Number(t.amount || 0) : Number(t.amount || 0);
+            return { ...acc, balance: (acc.balance || 0) + change };
+          }
+          return acc;
+        });
+        set(ref(db, 'accounts'), updatedAccs);
+
+        // Catat ke Audit Log
+        const auditRef = push(ref(db, 'auditLogs'));
+        set(auditRef, {
+          timestamp: new Date().toLocaleString('id-ID'),
+          user: currentUser ? currentUser.name : 'User',
+          action: `Menghapus transaksi ${t.type} sebesar ${formatIDR(t.amount)}`,
+          module: t.type
+        });
+
+        showToast('🗑️ Transaksi berhasil dihapus dari Cloud!');
       };
 
       const openEditTransaction = (t) => {
@@ -1627,7 +1810,7 @@
 
               {activeMenu === 'revenue' && (
                 <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
-                  <div className="flex justify-between items-center pb-4 border-b border-white/15">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/15">
                     <div>
                       <h2 className="text-lg font-bold text-slate-100">Daftar Penerimaan / Pendapatan Desa</h2>
                       <p className="text-xs text-slate-400">Seluruh arus masuk kas tercatat</p>
@@ -1641,6 +1824,37 @@
                       </button>
                     )}
                   </div>
+
+                  {/* Filter Kategori & Kegiatan Pendapatan */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white/[0.04] backdrop-blur-3xl p-4 rounded-2xl border border-white/15 shadow-inner text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-300 mb-1.5">Filter Kategori</label>
+                      <select
+                        value={revenueCategoryFilter}
+                        onChange={(e) => { setRevenueCategoryFilter(e.target.value); setRevenuePage(1); }}
+                        className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-white font-semibold focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="Semua">Semua Kategori</option>
+                        {budgetItems.filter(b => b.category === 'Pendapatan').map(b => (
+                          <option key={b.id} value={b.name}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-300 mb-1.5">Filter Kegiatan Terkait</label>
+                      <select
+                        value={revenueActivityFilter}
+                        onChange={(e) => { setRevenueActivityFilter(e.target.value); setRevenuePage(1); }}
+                        className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-white font-semibold focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="Semua">Semua Kegiatan</option>
+                        {availableActivities.map((act, idx) => (
+                          <option key={idx} value={act}>{act}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-xs">
                       <thead>
@@ -1654,12 +1868,31 @@
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/10">
-                        {sortTransactionsChronologically(transactions)
-                          .filter(t => {
+                        {(() => {
+                          const filteredRevenue = sortTransactionsChronologically(transactions).filter(t => {
                             const typeStr = (t.type || '').toLowerCase();
-                            return typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
-                          })
-                          .map(t => (
+                            const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+                            if (!isInc) return false;
+
+                            const matchCat = revenueCategoryFilter === 'Semua' || t.category === revenueCategoryFilter;
+                            const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                            const matchAct = revenueActivityFilter === 'Semua' || actName === revenueActivityFilter;
+
+                            return matchCat && matchAct;
+                          });
+
+                          const totalPages = Math.ceil(filteredRevenue.length / itemsPerPage) || 1;
+                          const paginatedData = filteredRevenue.slice((revenuePage - 1) * itemsPerPage, revenuePage * itemsPerPage);
+
+                          if (paginatedData.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={userPermissions.canEdit ? 6 : 5} className="p-6 text-center text-slate-400 italic">Tidak ada data penerimaan yang sesuai filter</td>
+                              </tr>
+                            );
+                          }
+
+                          return paginatedData.map(t => (
                             <tr key={t.idKey || t.id} className="hover:bg-white/[0.05] transition">
                               <td className="p-3 text-slate-400">{t.date}</td>
                               <td className="p-3 font-bold text-emerald-400">{t.category}</td>
@@ -1667,26 +1900,73 @@
                               <td className="p-3 text-slate-200">{t.description}</td>
                               <td className="p-3 text-right font-bold text-emerald-400">+{formatIDR(t.amount)}</td>
                               {userPermissions.canEdit && (
-                                <td className="p-3 text-center">
+                                <td className="p-3 text-center flex items-center justify-center gap-1.5">
                                   <button
                                     onClick={() => openEditTransaction(t)}
-                                    className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
+                                    className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 backdrop-blur-3xl"
+                                    title="Edit Transaksi"
                                   >
                                     <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteTransaction(t)}
+                                    className="bg-rose-950/30 text-rose-300 hover:bg-rose-900/40 border border-rose-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 backdrop-blur-3xl"
+                                    title="Hapus Transaksi"
+                                  >
+                                    <i data-lucide="trash-2" className="w-3.5 h-3.5"></i> Hapus
                                   </button>
                                 </td>
                               )}
                             </tr>
-                        ))}
+                          ));
+                        })()}
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Navigasi Pagination Penerimaan */}
+                  {(() => {
+                    const filteredRevenue = sortTransactionsChronologically(transactions).filter(t => {
+                      const typeStr = (t.type || '').toLowerCase();
+                      const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+                      if (!isInc) return false;
+
+                      const matchCat = revenueCategoryFilter === 'Semua' || t.category === revenueCategoryFilter;
+                      const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                      const matchAct = revenueActivityFilter === 'Semua' || actName === revenueActivityFilter;
+
+                      return matchCat && matchAct;
+                    });
+                    const totalPages = Math.ceil(filteredRevenue.length / itemsPerPage) || 1;
+                    if (totalPages <= 1) return null;
+                    return (
+                      <div className="flex justify-between items-center pt-2 text-xs">
+                        <span className="text-slate-400">Halaman {revenuePage} dari {totalPages}</span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setRevenuePage(prev => Math.max(prev - 1, 1))}
+                            disabled={revenuePage === 1}
+                            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                          >
+                            Sebelumnya
+                          </button>
+                          <button
+                            onClick={() => setRevenuePage(prev => Math.min(prev + 1, totalPages))}
+                            disabled={revenuePage === totalPages}
+                            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                          >
+                            Berikutnya
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
               {activeMenu === 'expenditure' && (
                 <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
-                  <div className="flex justify-between items-center pb-4 border-b border-white/15">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/15">
                     <div>
                       <h2 className="text-lg font-bold text-slate-100">Daftar Pengeluaran / Belanja Desa</h2>
                       <p className="text-xs text-slate-400">Seluruh arus keluar kas dan belanja kegiatan</p>
@@ -1700,6 +1980,37 @@
                       </button>
                     )}
                   </div>
+
+                  {/* Filter Kategori & Kegiatan Pengeluaran */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white/[0.04] backdrop-blur-3xl p-4 rounded-2xl border border-white/15 shadow-inner text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-300 mb-1.5">Filter Kategori</label>
+                      <select
+                        value={expenditureCategoryFilter}
+                        onChange={(e) => { setExpenditureCategoryFilter(e.target.value); setExpenditurePage(1); }}
+                        className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-white font-semibold focus:outline-none focus:border-rose-500"
+                      >
+                        <option value="Semua">Semua Kategori</option>
+                        {budgetItems.filter(b => b.category === 'Belanja').map(b => (
+                          <option key={b.id} value={b.name}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-300 mb-1.5">Filter Kegiatan Terkait</label>
+                      <select
+                        value={expenditureActivityFilter}
+                        onChange={(e) => { setExpenditureActivityFilter(e.target.value); setExpenditurePage(1); }}
+                        className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-white font-semibold focus:outline-none focus:border-rose-500"
+                      >
+                        <option value="Semua">Semua Kegiatan</option>
+                        {availableActivities.map((act, idx) => (
+                          <option key={idx} value={act}>{act}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-xs">
                       <thead>
@@ -1713,18 +2024,195 @@
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/10">
-                        {sortTransactionsChronologically(transactions)
-                          .filter(t => {
+                        {(() => {
+                          const filteredExpenditure = sortTransactionsChronologically(transactions).filter(t => {
                             const typeStr = (t.type || '').toLowerCase();
-                            return typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
-                          })
-                          .map(t => (
+                            const isOut = typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
+                            if (!isOut) return false;
+
+                            const matchCat = expenditureCategoryFilter === 'Semua' || t.category === expenditureCategoryFilter;
+                            const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                            const matchAct = expenditureActivityFilter === 'Semua' || actName === expenditureActivityFilter;
+
+                            return matchCat && matchAct;
+                          });
+
+                          const totalPages = Math.ceil(filteredExpenditure.length / itemsPerPage) || 1;
+                          const paginatedData = filteredExpenditure.slice((expenditurePage - 1) * itemsPerPage, expenditurePage * itemsPerPage);
+
+                          if (paginatedData.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={userPermissions.canEdit ? 6 : 5} className="p-6 text-center text-slate-400 italic">Tidak ada data pengeluaran yang sesuai filter</td>
+                              </tr>
+                            );
+                          }
+
+                          return paginatedData.map(t => (
                             <tr key={t.idKey || t.id} className="hover:bg-white/[0.05] transition">
                               <td className="p-3 text-slate-400">{t.date}</td>
                               <td className="p-3 font-bold text-rose-400">{t.category}</td>
                               <td className="p-3 font-medium text-slate-300">{t.activity || '-'}</td>
                               <td className="p-3 text-slate-200">{t.description}</td>
                               <td className="p-3 text-right font-bold text-rose-400">-{formatIDR(t.amount)}</td>
+                              {userPermissions.canEdit && (
+                                <td className="p-3 text-center flex items-center justify-center gap-1.5">
+                                  <button
+                                    onClick={() => openEditTransaction(t)}
+                                    className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 backdrop-blur-3xl"
+                                    title="Edit Transaksi"
+                                  >
+                                    <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteTransaction(t)}
+                                    className="bg-rose-950/30 text-rose-300 hover:bg-rose-900/40 border border-rose-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 backdrop-blur-3xl"
+                                    title="Hapus Transaksi"
+                                  >
+                                    <i data-lucide="trash-2" className="w-3.5 h-3.5"></i> Hapus
+                                  </button>
+                                </td>
+                              )}
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Navigasi Pagination Pengeluaran */}
+                  {(() => {
+                    const filteredExpenditure = sortTransactionsChronologically(transactions).filter(t => {
+                      const typeStr = (t.type || '').toLowerCase();
+                      const isOut = typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
+                      if (!isOut) return false;
+
+                      const matchCat = expenditureCategoryFilter === 'Semua' || t.category === expenditureCategoryFilter;
+                      const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                      const matchAct = expenditureActivityFilter === 'Semua' || actName === expenditureActivityFilter;
+
+                      return matchCat && matchAct;
+                    });
+                    const totalPages = Math.ceil(filteredExpenditure.length / itemsPerPage) || 1;
+                    if (totalPages <= 1) return null;
+                    return (
+                      <div className="flex justify-between items-center pt-2 text-xs">
+                        <span className="text-slate-400">Halaman {expenditurePage} dari {totalPages}</span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setExpenditurePage(prev => Math.max(prev - 1, 1))}
+                            disabled={expenditurePage === 1}
+                            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                          >
+                            Sebelumnya
+                          </button>
+                          <button
+                            onClick={() => setExpenditurePage(prev => Math.min(prev + 1, totalPages))}
+                            disabled={expenditurePage === totalPages}
+                            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                          >
+                            Berikutnya
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {activeMenu === 'bku' && (
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+                  <div className="pb-4 border-b border-white/15">
+                    <h2 className="text-lg font-bold text-slate-100">Buku Kas Umum (BKU) Desa</h2>
+                    <p className="text-xs text-slate-400">Catatan kronologis dari bulan Januari hingga Desember (Tanggal 1 s.d. 31)</p>
+                  </div>
+
+                  {/* Filter Kategori & Kegiatan BKU */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white/[0.04] backdrop-blur-3xl p-4 rounded-2xl border border-white/15 shadow-inner text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-300 mb-1.5">Filter Kategori</label>
+                      <select
+                        value={bkuCategoryFilter}
+                        onChange={(e) => { setBkuCategoryFilter(e.target.value); setBkuPage(1); }}
+                        className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-white font-semibold focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="Semua">Semua Kategori</option>
+                        {budgetItems.map(b => (
+                          <option key={b.id} value={b.name}>{b.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-300 mb-1.5">Filter Kegiatan Terkait</label>
+                      <select
+                        value={bkuActivityFilter}
+                        onChange={(e) => { setBkuActivityFilter(e.target.value); setBkuPage(1); }}
+                        className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-white font-semibold focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="Semua">Semua Kegiatan</option>
+                        {availableActivities.map((act, idx) => (
+                          <option key={idx} value={act}>{act}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-white/15 bg-white/[0.04] font-bold text-slate-300">
+                          <th className="p-3">Tanggal</th>
+                          <th className="p-3">Kategori</th>
+                          <th className="p-3">Kegiatan Terkait</th>
+                          <th className="p-3">Uraian / Keterangan</th>
+                          <th className="p-3 text-right">Penerimaan (Rp)</th>
+                          <th className="p-3 text-right">Pengeluaran (Rp)</th>
+                          <th className="p-3 text-right">Saldo Berjalan (Rp)</th>
+                          {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/10">
+                        {(() => {
+                          const allSorted = sortTransactionsChronologically(transactions);
+                          let runningBalance = 0;
+                          
+                          // Hitung saldo berjalan untuk seluruh data terlebih dahulu secara kronologis
+                          const mappedTrx = allSorted.map((t) => {
+                            const typeStr = (t.type || '').toLowerCase();
+                            const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+                            runningBalance += isInc ? Number(t.amount || 0) : -Number(t.amount || 0);
+                            return { ...t, isInc, currentBalance: runningBalance };
+                          });
+
+                          // Filter data BKU berdasarkan Kategori & Kegiatan
+                          const filteredBku = mappedTrx.filter(t => {
+                            const matchCat = bkuCategoryFilter === 'Semua' || t.category === bkuCategoryFilter;
+                            const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                            const matchAct = bkuActivityFilter === 'Semua' || actName === bkuActivityFilter;
+
+                            return matchCat && matchAct;
+                          });
+
+                          const totalPages = Math.ceil(filteredBku.length / itemsPerPage) || 1;
+                          const paginatedData = filteredBku.slice((bkuPage - 1) * itemsPerPage, bkuPage * itemsPerPage);
+
+                          if (paginatedData.length === 0) {
+                            return (
+                              <tr>
+                                <td colSpan={userPermissions.canEdit ? 8 : 7} className="p-6 text-center text-slate-400 italic">Tidak ada data BKU yang sesuai dengan filter</td>
+                              </tr>
+                            );
+                          }
+
+                          return paginatedData.map((t, idx) => (
+                            <tr key={t.idKey || idx} className="hover:bg-white/[0.05] transition">
+                              <td className="p-3 text-slate-400 whitespace-nowrap">{t.date}</td>
+                              <td className="p-3 font-bold text-slate-200">{t.category}</td>
+                              <td className="p-3 font-semibold text-emerald-400">{t.activity || '-'}</td>
+                              <td className="p-3 text-slate-300">{t.description}</td>
+                              <td className="p-3 text-right font-bold text-emerald-400">{t.isInc ? formatIDR(t.amount) : '-'}</td>
+                              <td className="p-3 text-right font-bold text-rose-400">{!t.isInc ? formatIDR(t.amount) : '-'}</td>
+                              <td className={`p-3 text-right font-black ${t.currentBalance < 0 ? 'text-rose-400' : 'text-slate-100'}`}>{formatIDR(t.currentBalance)}</td>
                               {userPermissions.canEdit && (
                                 <td className="p-3 text-center">
                                   <button
@@ -1736,64 +2224,55 @@
                                 </td>
                               )}
                             </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {activeMenu === 'bku' && (
-                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
-                  <div className="pb-4 border-b border-white/15">
-                    <h2 className="text-lg font-bold text-slate-100">Buku Kas Umum (BKU) Desa</h2>
-                    <p className="text-xs text-slate-400">Catatan kronologis dari bulan Januari hingga Desember (Tanggal 1 s.d. 31)</p>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead>
-                        <tr className="border-b border-white/15 bg-white/[0.04] font-bold text-slate-300">
-                          <th className="p-3">Tanggal</th>
-                          <th className="p-3">Kegiatan Terkait</th>
-                          <th className="p-3">Uraian / Keterangan</th>
-                          <th className="p-3 text-right">Penerimaan (Rp)</th>
-                          <th className="p-3 text-right">Pengeluaran (Rp)</th>
-                          <th className="p-3 text-right">Saldo Berjalan (Rp)</th>
-                          {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/10">
-                        {(() => {
-                          let runningBalance = 0;
-                          return sortTransactionsChronologically(transactions).map((t, idx) => {
-                            const typeStr = (t.type || '').toLowerCase();
-                            const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
-                            runningBalance += isInc ? Number(t.amount) : -Number(t.amount);
-                            return (
-                              <tr key={t.idKey || idx} className="hover:bg-white/[0.05] transition">
-                                <td className="p-3 text-slate-400 whitespace-nowrap">{t.date}</td>
-                                <td className="p-3 font-semibold text-emerald-400">{t.activity || '-'}</td>
-                                <td className="p-3 text-slate-300">{t.description}</td>
-                                <td className="p-3 text-right font-bold text-emerald-400">{isInc ? formatIDR(t.amount) : '-'}</td>
-                                <td className="p-3 text-right font-bold text-rose-400">{!isInc ? formatIDR(t.amount) : '-'}</td>
-                                <td className={`p-3 text-right font-black ${runningBalance < 0 ? 'text-rose-400' : 'text-slate-100'}`}>{formatIDR(runningBalance)}</td>
-                                {userPermissions.canEdit && (
-                                  <td className="p-3 text-center">
-                                    <button
-                                      onClick={() => openEditTransaction(t)}
-                                      className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2 py-1 rounded font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
-                                    >
-                                      <i data-lucide="edit" className="w-3 h-3"></i> Edit
-                                    </button>
-                                  </td>
-                                )}
-                              </tr>
-                            );
-                          });
+                          ));
                         })()}
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Navigasi Pagination BKU */}
+                  {(() => {
+                    const allSorted = sortTransactionsChronologically(transactions);
+                    let runningBal = 0;
+                    const mappedTrx = allSorted.map((t) => {
+                      const typeStr = (t.type || '').toLowerCase();
+                      const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
+                      runningBal += isInc ? Number(t.amount || 0) : -Number(t.amount || 0);
+                      return { ...t, isInc };
+                    });
+
+                    const filteredBku = mappedTrx.filter(t => {
+                      const matchCat = bkuCategoryFilter === 'Semua' || t.category === bkuCategoryFilter;
+                      const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                      const matchAct = bkuActivityFilter === 'Semua' || actName === bkuActivityFilter;
+
+                      return matchCat && matchAct;
+                    });
+
+                    const totalPages = Math.ceil(filteredBku.length / itemsPerPage) || 1;
+                    if (totalPages <= 1) return null;
+                    return (
+                      <div className="flex justify-between items-center pt-2 text-xs">
+                        <span className="text-slate-400">Halaman {bkuPage} dari {totalPages}</span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setBkuPage(prev => Math.max(prev - 1, 1))}
+                            disabled={bkuPage === 1}
+                            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                          >
+                            Sebelumnya
+                          </button>
+                          <button
+                            onClick={() => setBkuPage(prev => Math.min(prev + 1, totalPages))}
+                            disabled={bkuPage === totalPages}
+                            className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                          >
+                            Berikutnya
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -1816,10 +2295,10 @@
                         <i data-lucide="printer" className="w-4 h-4"></i> Cetak Laporan (PDF)
                       </button>
                       <button
-                        onClick={handleDownloadReportCSV}
+                        onClick={handleDownloadReportXLSX}
                         className="bg-blue-600/80 hover:bg-blue-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg border border-blue-400/40 transition"
                       >
-                        <i data-lucide="download" className="w-4 h-4"></i> Unduh CSV
+                        <i data-lucide="download" className="w-4 h-4"></i> Unduh CSV/Excal
                       </button>
                     </div>
                   </div>
@@ -1896,27 +2375,36 @@
                               <th className="p-2.5 border border-slate-300">Uraian / Keterangan</th>
                               <th className="p-2.5 border border-slate-300 text-right">Penerimaan (Rp)</th>
                               <th className="p-2.5 border border-slate-300 text-right">Pengeluaran (Rp)</th>
+                              <th className="p-2.5 border border-slate-300 text-right">Saldo (Rp)</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {sortTransactionsChronologically(transactions).length === 0 ? (
-                              <tr>
-                                <td colSpan={5} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data transaksi tercatat</td>
-                              </tr>
-                            ) : (
-                              sortTransactionsChronologically(transactions).map((t, idx) => {
+                            {(() => {
+                              let runningBal = 0;
+                              const sortedTrx = sortTransactionsChronologically(transactions);
+                              if (sortedTrx.length === 0) {
+                                return (
+                                  <tr>
+                                    <td colSpan={6} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data transaksi tercatat</td>
+                                  </tr>
+                                );
+                              }
+                              return sortedTrx.map((t, idx) => {
                                 const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+                                const amt = Number(t.amount || 0);
+                                runningBal += isInc ? amt : -amt;
                                 return (
                                   <tr key={idx} className="border-b border-slate-200">
                                     <td className="p-2.5 border border-slate-300">{t.date}</td>
                                     <td className="p-2.5 border border-slate-300 font-semibold">{t.activity || '-'}</td>
                                     <td className="p-2.5 border border-slate-300">{t.description}</td>
-                                    <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{isInc ? formatIDR(t.amount) : '-'}</td>
-                                    <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{!isInc ? formatIDR(t.amount) : '-'}</td>
+                                    <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{isInc ? formatIDR(amt) : '-'}</td>
+                                    <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{!isInc ? formatIDR(amt) : '-'}</td>
+                                    <td className="p-2.5 border border-slate-300 text-right font-black text-slate-900">{formatIDR(runningBal)}</td>
                                   </tr>
                                 );
-                              })
-                            )}
+                              });
+                            })()}
                           </tbody>
                         </table>
                       </div>
@@ -1935,19 +2423,24 @@
                                 <th className="p-2.5 border border-slate-300">Kategori APBDes</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Total Pendapatan (Rp)</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Total Belanja (Rp)</th>
+                                <th className="p-2.5 border border-slate-300 text-right">Saldo / Sisa (Rp)</th>
                               </tr>
                             </thead>
                             <tbody>
                               {categoryBreakdown
                                 .filter(c => reportCategoryFilter === 'Semua' || c.name === reportCategoryFilter)
-                                .map((c, idx) => (
-                                  <tr key={idx} className="border-b border-slate-200">
-                                    <td className="p-2.5 border border-slate-300 text-center">{idx + 1}</td>
-                                    <td className="p-2.5 border border-slate-300 font-bold">{c.name}</td>
-                                    <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{formatIDR(c.totalIn)}</td>
-                                    <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{formatIDR(c.totalOut)}</td>
-                                  </tr>
-                              ))}
+                                .map((c, idx) => {
+                                  const netCat = c.totalIn - c.totalOut;
+                                  return (
+                                    <tr key={idx} className="border-b border-slate-200">
+                                      <td className="p-2.5 border border-slate-300 text-center">{idx + 1}</td>
+                                      <td className="p-2.5 border border-slate-300 font-bold">{c.name}</td>
+                                      <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{formatIDR(c.totalIn)}</td>
+                                      <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{formatIDR(c.totalOut)}</td>
+                                      <td className="p-2.5 border border-slate-300 text-right font-black text-slate-900">{formatIDR(netCat)}</td>
+                                    </tr>
+                                  );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -1964,13 +2457,28 @@
                                 <th className="p-2.5 border border-slate-300">Uraian / Keterangan Transaksi</th>
                                 <th className="p-2.5 border border-slate-300">Jenis</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Nominal (Rp)</th>
+                                <th className="p-2.5 border border-slate-300 text-right">Saldo (Rp)</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {sortTransactionsChronologically(transactions)
-                                .filter(t => reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter)
-                                .map((t, idx) => {
+                              {(() => {
+                                let runningBalCat = 0;
+                                const sortedTrx = sortTransactionsChronologically(transactions);
+                                const filteredTrx = sortedTrx.filter(t => reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter);
+
+                                if (filteredTrx.length === 0) {
+                                  return (
+                                    <tr>
+                                      <td colSpan={6} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data rincian transaksi kategori</td>
+                                    </tr>
+                                  );
+                                }
+
+                                return filteredTrx.map((t, idx) => {
                                   const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+                                  const amt = Number(t.amount || 0);
+                                  runningBalCat += isInc ? amt : -amt;
+
                                   return (
                                     <tr key={idx} className="border-b border-slate-200">
                                       <td className="p-2.5 border border-slate-300">{t.date}</td>
@@ -1978,11 +2486,15 @@
                                       <td className="p-2.5 border border-slate-300 text-slate-800">{t.description}</td>
                                       <td className="p-2.5 border border-slate-300 font-semibold">{t.type}</td>
                                       <td className={`p-2.5 border border-slate-300 text-right font-bold ${isInc ? 'text-emerald-700' : 'text-rose-700'}`}>
-                                        {isInc ? '+' : '-'}{formatIDR(t.amount)}
+                                        {isInc ? '+' : '-'}{formatIDR(amt)}
+                                      </td>
+                                      <td className="p-2.5 border border-slate-300 text-right font-black text-slate-900">
+                                        {formatIDR(runningBalCat)}
                                       </td>
                                     </tr>
                                   );
-                                })}
+                                });
+                              })()}
                             </tbody>
                           </table>
                         </div>
