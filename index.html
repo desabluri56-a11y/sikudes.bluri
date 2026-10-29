@@ -175,6 +175,9 @@
     function App() {
       const [theme, setTheme] = useState('light');
       const [activeMenu, setActiveMenu] = useState('dashboard');
+
+      // TAMBAHKAN STATE INI UNTUK SIDEBAR MOBILE:
+      const [isSidebarOpen, setIsSidebarOpen] = useState(false);
       
       const [isAuthenticated, setIsAuthenticated] = useState(false);
       const [currentUser, setCurrentUser] = useState(null);
@@ -207,17 +210,17 @@
       ]);
 
       const [budgetItems, setBudgetItems] = useState([
-        { id: '4.1', code: '4.1', category: 'Pendapatan', name: 'Pendapatan Asli Desa (PAD)', budget: 100000000, realization: 0 },
-        { id: '4.2', code: '4.2', category: 'Pendapatan', name: 'Dana Desa (DD)', budget: 800000000, realization: 0 },
-        { id: '4.3', code: '4.3', category: 'Pendapatan', name: 'Alokasi Dana Desa (ADD)', budget: 400000000, realization: 0 },
-        { id: '4.4', code: '4.4', category: 'Pendapatan', name: 'Bagi Hasil Pajak (BHP)', budget: 50000050, realization: 0 },
+        { id: '4.1', code: '4.1', category: 'Pendapatan', name: 'Pendapatan Asli Desa (PAD)', budget: 0, realization: 0 },
+        { id: '4.2', code: '4.2', category: 'Pendapatan', name: 'Dana Desa (DD)', budget: 0, realization: 0 },
+        { id: '4.3', code: '4.3', category: 'Pendapatan', name: 'Alokasi Dana Desa (ADD)', budget: 0, realization: 0 },
+        { id: '4.4', code: '4.4', category: 'Pendapatan', name: 'Bagi Hasil Pajak (BHP)', budget: 0, realization: 0 },
         { id: '4.5', code: '4.5', category: 'Pendapatan', name: 'Pinjaman dan dana tak terduga', budget: 0, realization: 0 },
         { id: '4.7', code: '4.7', category: 'Pendapatan', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
         
-        { id: '5.1', code: '5.1', category: 'Belanja', name: 'Pendapatan Asli Desa (PAD)', budget: 100000000, realization: 0 },
-        { id: '5.2', code: '5.2', category: 'Belanja', name: 'Alokasi Dana Desa (ADD)', budget: 400000000, realization: 0 },
-        { id: '5.3', code: '5.3', category: 'Belanja', name: 'Dana Desa (DD)', budget: 800000000, realization: 0 },
-        { id: '5.4', code: '5.4', category: 'Belanja', name: 'Bagi Hasil Pajak (BHP)', budget: 50000000, realization: 0 },
+        { id: '5.1', code: '5.1', category: 'Belanja', name: 'Pendapatan Asli Desa (PAD)', budget: 0, realization: 0 },
+        { id: '5.2', code: '5.2', category: 'Belanja', name: 'Alokasi Dana Desa (ADD)', budget: 0, realization: 0 },
+        { id: '5.3', code: '5.3', category: 'Belanja', name: 'Dana Desa (DD)', budget: 0, realization: 0 },
+        { id: '5.4', code: '5.4', category: 'Belanja', name: 'Bagi Hasil Pajak (BHP)', budget: 0, realization: 0 },
         { id: '5.5', code: '5.5', category: 'Belanja', name: 'Pinjaman dan Dana Tak terduga', budget: 0, realization: 0 },
         { id: '5.7', code: '5.7', category: 'Belanja', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
       ]);
@@ -227,6 +230,14 @@
 
       const [selectedYear, setSelectedYear] = useState('2026');
       const [notificationMsg, setNotificationMsg] = useState(null);
+
+      // Fungsi untuk menghitung total realisasi dana dari cloud transactions berdasarkan kategori APBDes
+      const getCategoryRealization = (categoryName) => {
+        if (!transactions || transactions.length === 0) return 0;
+        return transactions
+          .filter(t => (t.category || '').toLowerCase() === categoryName.toLowerCase())
+          .reduce((sum, curr) => sum + Number(curr.amount || 0), 0);
+      };
 
       const [reportType, setReportType] = useState('bku');
       const [reportCategoryFilter, setReportCategoryFilter] = useState('Semua');
@@ -446,11 +457,13 @@
           })
           .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
         
-        const totalCashBalance = approvedRevenue - approvedExpenditure;
+        // PERUBAHAN DI SINI: Total Kas Aktif menjumlahkan saldo dari seluruh akun (Kas Tunai + Bank Jatim + Bank BRI, dll)
+        const totalCashBalance = accounts.reduce((acc, curr) => acc + Number(curr.balance || 0), 0);
+        
         const absorptionRate = totalBudgetExpenditure > 0 ? ((approvedExpenditure / totalBudgetExpenditure) * 100).toFixed(1) : '0';
 
         return { totalBudgetRevenue, totalBudgetExpenditure, approvedRevenue, approvedExpenditure, totalCashBalance, absorptionRate };
-      }, [budgetItems, transactions]);
+      }, [budgetItems, transactions, accounts]); // Jangan lupa tambahkan 'accounts' di dependency array useMemo
 
       const recentTransactions = useMemo(() => {
         return [...transactions].reverse().slice(0, 5);
@@ -1156,8 +1169,8 @@
                       🏛️
                     </div>
                     <div>
-                      <h1 className="text-xl font-black tracking-tight text-white leading-tight">SIKUDES CLOUD</h1>
-                      <p className="text-xs text-emerald-200 font-medium">Sistem Keuangan Desa Digital</p>
+                      <h1 className="text-xl font-black tracking-tight text-white leading-tight">SIKUDES DESA BLURI</h1>
+                      <p className="text-xs text-emerald-200 font-medium">Sistem Keuangan Desa Bluri Digital</p>
                     </div>
                   </div>
 
@@ -1166,16 +1179,6 @@
                     <h2 className="text-lg font-extrabold text-white">{villageProfile.name}</h2>
                     <p className="text-xs text-emerald-100">{villageProfile.district}, {villageProfile.regency}</p>
                     <p className="text-xs text-emerald-200/80">{villageProfile.province}</p>
-                  </div>
-
-                  <div className="bg-emerald-900/10 backdrop-blur-3xl rounded-2xl p-4 border border-emerald-400/25 space-y-1.5">
-                    <div className="flex items-center gap-2 text-emerald-300 font-bold text-xs">
-                      <i data-lucide="shield-check" className="w-4 h-4 text-emerald-400"></i>
-                      <span>Crystal Clear Security</span>
-                    </div>
-                    <p className="text-[11px] text-emerald-100/70 leading-relaxed">
-                      Sistem transparan tembus pandang terintegrasi langsung dengan Firebase Realtime Database untuk APBDes T.A. 2026.
-                    </p>
                   </div>
                 </div>
 
@@ -1274,6 +1277,15 @@
           <header className="sticky top-0 z-35 border-b border-white/15 bg-white/[0.02] backdrop-blur-[35px] px-4 py-3 shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
             <div className="max-w-7xl mx-auto flex items-center justify-between">
               <div className="flex items-center gap-3">
+                {/* TOMBOL GARIS 3 (HAMBURGER) - Hanya tampil di tampilan mobile/HP */}
+                <button
+                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                  className="md:hidden p-2 rounded-xl bg-white/[0.05] border border-white/15 text-slate-200 hover:bg-white/10 transition"
+                  aria-label="Buka Menu"
+                >
+                  <i data-lucide={isSidebarOpen ? "x" : "menu"} className="w-5 h-5 text-emerald-400"></i>
+                </button>
+
                 <div className="w-10 h-10 rounded-xl bg-emerald-600/50 backdrop-blur-3xl flex items-center justify-center text-white text-xl font-bold shadow-lg shadow-emerald-700/30 border border-emerald-400/50">
                   {villageProfile.logo}
                 </div>
@@ -1320,9 +1332,33 @@
           <div className="max-w-7xl mx-auto px-4 py-6 flex flex-col md:flex-row gap-6 relative z-10 items-start">
             
             {/* SIDEBAR */}
-            <aside className="w-full md:w-64 shrink-0 sticky top-20 h-[calc(100vh-6rem)] overflow-y-auto pr-1 space-y-1">
+            {/* OVERLAY HITAM UNTUK MOBILE (Jika sidebar dibuka) */}
+            {isSidebarOpen && (
+              <div 
+                onClick={() => setIsSidebarOpen(false)}
+                className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-40 md:hidden transition-opacity"
+              ></div>
+            )}
+
+            {/* SIDEBAR NAVIGATION (Responsif Mobile & Desktop) */}
+            <aside className={`
+              fixed md:sticky top-0 md:top-20 z-40 md:z-auto h-full md:h-[calc(100vh-6rem)]
+              w-72 md:w-64 shrink-0 overflow-y-auto transition-transform duration-300 ease-in-out p-4 md:p-0 md:pr-1 space-y-1
+              bg-slate-950/95 md:bg-transparent border-r border-white/10 md:border-r-0
+              ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+            `}>
               <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-3 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)]">
-                <p className="text-[10px] uppercase font-bold text-slate-400 px-3 py-2 tracking-wider">Menu Utama</p>
+                <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 md:border-b-0 mb-2 md:mb-0">
+                  <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Menu Utama</p>
+                  {/* Tombol Tutup Khusus Layar Mobile */}
+                  <button 
+                    onClick={() => setIsSidebarOpen(false)}
+                    className="md:hidden text-slate-400 hover:text-white"
+                  >
+                    <i data-lucide="x" className="w-4 h-4"></i>
+                  </button>
+                </div>
+
                 <nav className="space-y-1">
                   {[
                     { id: 'dashboard', label: 'Dashboard APBDes', icon: 'layout-dashboard' },
@@ -1339,7 +1375,10 @@
                     return (
                       <button
                         key={item.id}
-                        onClick={() => setActiveMenu(item.id)}
+                        onClick={() => {
+                          setActiveMenu(item.id);
+                          setIsSidebarOpen(false); // Otomatis menutup sidebar saat menu dipilih di HP
+                        }}
                         className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition backdrop-blur-xl ${
                           isActive 
                             ? 'bg-emerald-600/70 text-white shadow-lg shadow-emerald-900/50 border border-emerald-400/40' 
@@ -1361,13 +1400,24 @@
                     {userPermissions.canImport && (
                       <label className="w-full flex items-center justify-center gap-2 bg-blue-950/20 backdrop-blur-3xl text-blue-300 border border-blue-500/30 py-2 rounded-xl text-xs font-bold hover:bg-blue-900/30 cursor-pointer transition shadow-inner">
                         <i data-lucide="upload" className="w-3.5 h-3.5"></i> Import Excel (CSV)
-                        <input type="file" accept=".csv, .txt" onChange={handleFileUpload} className="hidden" />
+                        <input 
+                          type="file" 
+                          accept=".csv, .txt" 
+                          onChange={(e) => {
+                            handleFileUpload(e);
+                            setIsSidebarOpen(false);
+                          }} 
+                          className="hidden" 
+                        />
                       </label>
                     )}
 
                     {userPermissions.canReset && (
                       <button
-                        onClick={handleResetTransactions}
+                        onClick={() => {
+                          handleResetTransactions();
+                          setIsSidebarOpen(false);
+                        }}
                         className="w-full flex items-center justify-center gap-2 bg-red-950/20 backdrop-blur-3xl text-red-300 border border-red-500/30 py-2 rounded-xl text-xs font-bold hover:bg-red-900/30 transition shadow-inner"
                       >
                         <i data-lucide="trash-2" className="w-3.5 h-3.5"></i> Reset Data Cloud
@@ -1377,13 +1427,23 @@
                     {userPermissions.canEdit && (
                       <>
                         <button
-                          onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setIsModalTrxOpen(true); }}
+                          onClick={() => { 
+                            setEditingTrx(null); 
+                            setTrxType('Pendapatan'); 
+                            setIsModalTrxOpen(true); 
+                            setIsSidebarOpen(false);
+                          }}
                           className="w-full flex items-center justify-center gap-2 bg-emerald-950/20 backdrop-blur-3xl text-emerald-300 border border-emerald-500/30 py-2 rounded-xl text-xs font-bold hover:bg-emerald-900/30 transition shadow-inner"
                         >
                           <i data-lucide="plus" className="w-3.5 h-3.5"></i> Tambah Pendapatan
                         </button>
                         <button
-                          onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setIsModalTrxOpen(true); }}
+                          onClick={() => { 
+                            setEditingTrx(null); 
+                            setTrxType('Pengeluaran'); 
+                            setIsModalTrxOpen(true); 
+                            setIsSidebarOpen(false);
+                          }}
                           className="w-full flex items-center justify-center gap-2 bg-rose-950/20 backdrop-blur-3xl text-rose-300 border border-rose-500/30 py-2 rounded-xl text-xs font-bold hover:bg-rose-900/30 transition shadow-inner"
                         >
                           <i data-lucide="plus" className="w-3.5 h-3.5"></i> Catat Belanja
@@ -1791,38 +1851,64 @@
 
               {activeMenu === 'budgeting' && (
                 <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
-                  <div className="pb-4 border-b border-white/15">
-                    <h2 className="text-lg font-bold text-slate-100">Struktur APBDes T.A. {selectedYear}</h2>
-                    <p className="text-xs text-slate-400">Rancangan Anggaran Pendapatan dan Belanja Desa</p>
+                  <div className="pb-4 border-b border-white/15 flex justify-between items-center">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-100">Struktur APBDes T.A. {selectedYear}</h2>
+                      <p className="text-xs text-slate-400">Rancangan Anggaran dan Realisasi Riil dari Cloud Database</p>
+                    </div>
+                    <span className="text-xs bg-emerald-950/40 text-emerald-300 px-3 py-1 rounded-full font-bold border border-emerald-500/30">
+                      Sinkronisasi Cloud Aktif
+                    </span>
                   </div>
+
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-xs">
                       <thead>
                         <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300">
                           <th className="p-3">Kode</th>
+                          <th className="p-3">Kelompok</th>
                           <th className="p-3">Kategori / Bidang</th>
                           <th className="p-3 text-right">Pagu Anggaran</th>
+                          <th className="p-3 text-right">Realisasi (Cloud)</th>
+                          <th className="p-3 text-center">% Penyerapan</th>
                           {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/10">
-                        {budgetItems.map(item => (
-                          <tr key={item.id} className="hover:bg-white/[0.05] transition">
-                            <td className="p-3 font-mono font-bold text-emerald-400">{item.code}</td>
-                            <td className="p-3 font-medium text-slate-200">{item.name}</td>
-                            <td className="p-3 text-right font-semibold text-slate-100">{formatIDR(item.budget)}</td>
-                            {userPermissions.canEdit && (
-                              <td className="p-3 text-center">
-                                <button
-                                  onClick={() => { setEditingBudget(item); setBudgetForm({ budget: item.budget }); setIsModalBudgetOpen(true); }}
-                                  className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
-                                >
-                                  <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit
-                                </button>
+                        {budgetItems.map(item => {
+                          const realVal = getCategoryRealization(item.name);
+                          const pct = item.budget > 0 ? ((realVal / item.budget) * 100).toFixed(1) : '0';
+                          const isPendapatan = item.category === 'Pendapatan';
+
+                          return (
+                            <tr key={item.id} className="hover:bg-white/[0.05] transition">
+                              <td className="p-3 font-mono font-bold text-emerald-400">{item.code}</td>
+                              <td className="p-3">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${isPendapatan ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30' : 'bg-rose-950/40 text-rose-300 border-rose-500/30'}`}>
+                                  {item.category}
+                                </span>
                               </td>
-                            )}
-                          </tr>
-                        ))}
+                              <td className="p-3 font-medium text-slate-200">{item.name}</td>
+                              <td className="p-3 text-right font-semibold text-slate-100">{formatIDR(item.budget)}</td>
+                              <td className={`p-3 text-right font-bold ${isPendapatan ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {formatIDR(realVal)}
+                              </td>
+                              <td className="p-3 text-center font-bold text-blue-400">
+                                {pct}%
+                              </td>
+                              {userPermissions.canEdit && (
+                                <td className="p-3 text-center">
+                                  <button
+                                    onClick={() => { setEditingBudget(item); setBudgetForm({ budget: item.budget }); setIsModalBudgetOpen(true); }}
+                                    className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1.5 rounded-lg font-bold flex items-center gap-1 mx-auto backdrop-blur-3xl"
+                                  >
+                                    <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit Pagu
+                                  </button>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
