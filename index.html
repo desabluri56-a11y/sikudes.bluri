@@ -221,7 +221,7 @@
         { id: '5.2', code: '5.2', category: 'Belanja', name: 'Alokasi Dana Desa (ADD)', budget: 0, realization: 0 },
         { id: '5.3', code: '5.3', category: 'Belanja', name: 'Dana Desa (DD)', budget: 0, realization: 0 },
         { id: '5.4', code: '5.4', category: 'Belanja', name: 'Bagi Hasil Pajak (BHP)', budget: 0, realization: 0 },
-        { id: '5.5', code: '5.5', category: 'Belanja', name: 'Pinjaman dan Dana Tak terduga', budget: 0, realization: 0 },
+        { id: '5.5', code: '5.5', category: 'Belanja', name: 'Pinjaman dan Dana tak terduga', budget: 0, realization: 0 },
         { id: '5.7', code: '5.7', category: 'Belanja', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
       ]);
 
@@ -407,8 +407,6 @@
         setAct.add('Dana Desa (DD)');
         setAct.add('Operasional PAUD');
         setAct.add('Operasional POSYANDU');
-        setAct.add('Pembangunan Infrastruktur Desa');
-        setAct.add('Pemberdayaan Masyarakat');
         
         transactions.forEach(t => {
           if (t.activity && t.activity !== '-' && t.activity.trim() !== '') {
