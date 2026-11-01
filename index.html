@@ -22,6 +22,12 @@
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <style>
+    /* Mencegah elemen meluber keluar layar HP / Tablet */
+    body, html {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
     /* Custom Scrollbar for Glassmorphism UI */
     ::-webkit-scrollbar {
       width: 6px;
@@ -184,6 +190,30 @@
         return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
       });
       };
+
+      const [loans, setLoans] = useState([]);
+      const [isModalLoanOpen, setIsModalLoanOpen] = useState(false);
+      const [loanForm, setLoanForm] = useState({
+        borrower: '',
+        amount: '',
+        activity: '',
+        description: '',
+        dueDate: ''
+      });
+      const [loanPage, setLoanPage] = useState(1);
+      
+      // State untuk Hutang Desa (Tempel di sini)
+      const [villageDebts, setVillageDebts] = useState([]);
+      const [isModalDebtOpen, setIsModalDebtOpen] = useState(false);
+      const [editingDebt, setEditingDebt] = useState(null);
+      const [debtForm, setDebtForm] = useState({
+        creditor: '',
+        amount: '',
+        description: '',
+        date: new Date().toISOString().split('T')[0],
+        dueDate: '-',
+        status: 'Belum'
+      });
       
       const [isAuthenticated, setIsAuthenticated] = useState(false);
       const [currentUser, setCurrentUser] = useState(null);
@@ -231,6 +261,7 @@
         { id: '5.7', code: '5.7', category: 'Belanja', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
       ]);
 
+      
       const [transactions, setTransactions] = useState([]);
       const [auditLogs, setAuditLogs] = useState([]);
 
@@ -279,7 +310,7 @@
         taxType: 'Tidak Ada',
         taxPercent: 0
       });
-
+      
       const [isModalMasterOpen, setIsModalMasterOpen] = useState(false);
       const [masterForm, setMasterForm] = useState({ ...villageProfile });
 
@@ -291,11 +322,132 @@
       const [editingAccount, setEditingAccount] = useState(null);
       const [accountForm, setAccountForm] = useState({ name: '', balance: '' });
 
+      // 1. Catat Pinjaman Baru (Mengurangi Kas, Mengurangi Saldo Kegiatan, Masuk Pengeluaran)
+      const handleSaveLoan = (e) => {
+        e.preventDefault();
+        if (!userPermissions.canEdit) {
+          showToast('⚠️ Akses Ditolak!');
+          return;
+        }
+        const amountNum = Number(loanForm.amount);
+        if (amountNum <= 0) {
+          showToast('⚠️ Nominal pinjaman tidak valid!');
+          return;
+        }
+
+        const { db, ref, set, push, update } = window.FirebaseDB;
+        const loanId = `PINJAMAN-${Date.now().toString().slice(-4)}`;
+        const currentDate = new Date().toISOString().split('T')[0];
+
+        // Buat objek pinjaman baru
+        const newLoan = {
+          id: loanId,
+          borrower: loanForm.borrower,
+          amount: amountNum,
+          activity: loanForm.activity || 'Umum',
+          description: loanForm.description || 'Pencairan pinjaman dana',
+          date: currentDate,
+          dueDate: loanForm.dueDate || '-',
+          status: 'Belum Lunas'
+        };
+
+        // Buat transaksi otomatis sebagai PENGELUARAN
+        const trxRef = push(ref(db, 'transactions'));
+        const newTrx = {
+          id: `TRX-OUT-${loanId}`,
+          date: currentDate,
+          type: 'Pengeluaran',
+          category: 'Belanja Tak Terduga / Pembiayaan',
+          activity: loanForm.activity || 'Umum',
+          description: `Pencairan Pinjaman kepada ${loanForm.borrower}: ${loanForm.description}`,
+          accountId: '101',
+          accountName: 'Kas Bendahara Desa',
+          amount: amountNum,
+          netAmount: amountNum,
+          status: 'Disetujui',
+          approvedBy: currentUser.name
+        };
+
+        const updates = {};
+        updates[`loans/${push(ref(db, 'loans')).key}`] = newLoan;
+        updates[`transactions/${trxRef.key}`] = newTrx;
+
+        update(ref(db), updates).then(() => {
+          // Kurangi saldo rekening kas utama (Default akun '101')
+          const updatedAccs = accounts.map(acc => {
+            if (acc.id === '101') {
+              return { ...acc, balance: (acc.balance || 0) - amountNum };
+            }
+            return acc;
+          });
+          set(ref(db, 'accounts'), updatedAccs);
+
+          setIsModalLoanOpen(false);
+          setLoanForm({ borrower: '', amount: '', activity: '', description: '', dueDate: '' });
+          showToast('✅ Pinjaman berhasil dicatat, saldo kas & kegiatan dikurangi.');
+        });
+      };
+
+      // 2. Pengembalian / Pelunasan Pinjaman (Menambah Kas, Menambah Saldo Kegiatan, Masuk Pendapatan)
+      const handleReturnLoan = (loanItem) => {
+        if (!userPermissions.canEdit) {
+          showToast('⚠️ Akses Ditolak!');
+          return;
+        }
+        if (loanItem.status === 'Lunas') {
+          showToast('⚠️ Pinjaman ini sudah lunas sebelumnya.');
+          return;
+        }
+
+        if (!confirm(`Konfirmasi pelunasan pinjaman dari ${loanItem.borrower} sebesar ${formatIDR(loanItem.amount)}?`)) return;
+
+        const { db, ref, set, push, update } = window.FirebaseDB;
+        const currentDate = new Date().toISOString().split('T')[0];
+
+        // Update status pinjaman menjadi Lunas
+        const loanRef = ref(db, `loans/${loanItem.idKey}`);
+        
+        // Buat transaksi otomatis sebagai PENDAPATAN
+        const trxRef = push(ref(db, 'transactions'));
+        const newTrx = {
+          id: `TRX-IN-LUNAS-${loanItem.id}`,
+          date: currentDate,
+          type: 'Pendapatan',
+          category: 'Pendapatan Lain-lain / Pengembalian',
+          activity: loanItem.activity || 'Umum',
+          description: `Pengembalian/Pelunasan Pinjaman oleh ${loanItem.borrower}`,
+          accountId: '101',
+          accountName: 'Kas Bendahara Desa',
+          amount: loanItem.amount,
+          netAmount: loanItem.amount,
+          status: 'Disetujui',
+          approvedBy: currentUser.name
+        };
+
+        const updates = {};
+        updates[`loans/${loanItem.idKey}/status`] = 'Lunas';
+        updates[`transactions/${trxRef.key}`] = newTrx;
+
+        update(ref(db), updates).then(() => {
+          // Tambah kembali saldo rekening kas utama (Default akun '101')
+          const updatedAccs = accounts.map(acc => {
+            if (acc.id === '101') {
+              return { ...acc, balance: (acc.balance || 0) + loanItem.amount };
+            }
+            return acc;
+          });
+          set(ref(db, 'accounts'), updatedAccs);
+
+          showToast('🎉 Pengembalian pinjaman berhasil dicatat, saldo kas & kegiatan bertambah.');
+        });
+      };
+
       useEffect(() => {
         if (window.lucide) {
           window.lucide.createIcons();
         }
       });
+
       // Tambahkan blok ini di bawahnya:
       useEffect(() => {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -321,6 +473,29 @@
             onValue(accRef, (snapshot) => {
               const data = snapshot.val();
               if (data) setAccounts(data);
+            });
+
+            const loanRef = ref(db, 'loans');
+            onValue(loanRef, (snapshot) => {
+              const data = snapshot.val();
+              if (data) {
+                const loadedLoans = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
+                setLoans(loadedLoans.reverse());
+              } else {
+                setLoans([]);
+              }
+            });
+
+            // Tambahkan listener Firebase untuk Hutang Desa di sini:
+            const debtRef = ref(db, 'villageDebts');
+            onValue(debtRef, (snapshot) => {
+              const data = snapshot.val();
+              if (data) {
+                const loadedDebts = Object.keys(data).map(key => ({ idKey: key, ...data[key] }));
+                setVillageDebts(loadedDebts.reverse());
+              } else {
+                setVillageDebts([]);
+              }
             });
 
             const budgetRef = ref(db, 'budgetItems');
@@ -407,7 +582,7 @@
             canEdit: true,
             canImport: true,
             canReset: role === 'admin',
-            allowedMenus: ['dashboard', 'master', 'budgeting', 'revenue', 'expenditure', 'bku', 'reports', 'cash_management', 'audit']
+            allowedMenus: ['dashboard', 'master', 'budgeting', 'revenue', 'expenditure', 'loans', 'debts', 'bku', 'reports', 'cash_management', 'audit']
           };
         }
 
@@ -1019,6 +1194,105 @@
         e.target.value = '';
       };
 
+      // Fungsi Simpan / Edit Hutang Desa (Tidak Mengubah Kas Sama Sekali)
+      const handleSaveDebt = (e) => {
+        e.preventDefault();
+        if (!userPermissions.canEdit) {
+          showToast('⚠️ Akses Ditolak!');
+          return;
+        }
+        const amountNum = Number(debtForm.amount);
+        if (amountNum <= 0) {
+          showToast('⚠️ Nominal hutang tidak valid!');
+          return;
+        }
+
+        const { db, ref, set, push } = window.FirebaseDB;
+
+        if (editingDebt) {
+          const debtRef = ref(db, `villageDebts/${editingDebt.idKey}`);
+          const updatedData = {
+            ...editingDebt,
+            creditor: debtForm.creditor,
+            amount: amountNum,
+            description: debtForm.description,
+            date: debtForm.date,
+            dueDate: debtForm.dueDate || '-',
+            status: debtForm.status
+          };
+          set(debtRef, updatedData).then(() => {
+            setIsModalDebtOpen(false);
+            setEditingDebt(null);
+            setDebtForm({ creditor: '', amount: '', description: '', date: new Date().toISOString().split('T')[0], dueDate: '-', status: 'Belum' });
+            showToast('✅ Data hutang desa berhasil diperbarui!');
+          });
+        } else {
+          const debtId = `HUTANG-${Date.now().toString().slice(-4)}`;
+          const newDebt = {
+            id: debtId,
+            creditor: debtForm.creditor,
+            amount: amountNum,
+            description: debtForm.description || 'Pencatatan hutang desa',
+            date: debtForm.date || new Date().toISOString().split('T')[0],
+            dueDate: debtForm.dueDate || '-',
+            status: debtForm.status || 'Belum'
+          };
+
+          const debtRef = push(ref(db, 'villageDebts'));
+          set(debtRef, newDebt).then(() => {
+            setIsModalDebtOpen(false);
+            setDebtForm({ creditor: '', amount: '', description: '', date: new Date().toISOString().split('T')[0], dueDate: '-', status: 'Belum' });
+            showToast('✅ Hutang desa berhasil dicatat (Kas tidak terpengaruh).');
+          });
+        }
+      };
+
+      // Fungsi Hapus Hutang Desa
+      const handleDeleteDebt = (debtItem) => {
+        if (!userPermissions.canEdit) {
+          showToast('⚠️ Akses Ditolak!');
+          return;
+        }
+        if (!confirm(`Hapus catatan hutang kepada ${debtItem.creditor} senilai ${formatIDR(debtItem.amount)}?`)) return;
+
+        const { db, ref, set } = window.FirebaseDB;
+        const debtRef = ref(db, `villageDebts/${debtItem.idKey}`);
+        set(debtRef, null).then(() => {
+          showToast('🗑️ Catatan hutang berhasil dihapus.');
+        });
+      };
+
+      // Fungsi Download Excel Hutang Desa
+      const handleDownloadDebtXLSX = () => {
+        if (!window.XLSX) {
+          showToast('⚠️ Library Excel belum dimuat.');
+          return;
+        }
+        const wb = XLSX.utils.book_new();
+        const dataRows = [];
+        dataRows.push([`PEMERINTAH ${villageProfile.name.toUpperCase()}`]);
+        dataRows.push(['LAPORAN DATA HUTANG DESA']);
+        dataRows.push([`Tahun Anggaran ${selectedYear}`]);
+        dataRows.push([]);
+        dataRows.push(['ID / Tanggal', 'Pemberi Hutang (Kreditur)', 'Keterangan', 'Nominal (Rp)', 'Jatuh Tempo', 'Status']);
+
+        villageDebts.forEach(d => {
+          dataRows.push([
+            `${d.id} (${d.date})`,
+            d.creditor,
+            d.description,
+            d.amount,
+            d.dueDate,
+            d.status
+          ]);
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet(dataRows);
+        XLSX.utils.book_append_sheet(wb, ws, "Hutang Desa");
+        XLSX.writeFile(wb, `Laporan_Hutang_Desa_${villageProfile.name.replace(/\s+/g, '_')}.xlsx`);
+        showToast('📊 Berhasil mengunduh laporan hutang desa format Excel (.xlsx)!');
+      };
+
       const handleSaveTransaction = (e) => {
         e.preventDefault();
         if (!userPermissions.canEdit) {
@@ -1446,6 +1720,8 @@
                     { id: 'budgeting', label: 'Penganggaran (APBDes)', icon: 'layers' },
                     { id: 'revenue', label: 'Penerimaan / Pendapatan', icon: 'arrow-down-left' },
                     { id: 'expenditure', label: 'Pengeluaran / Belanja', icon: 'arrow-up-right' },
+                    { id: 'loans', label: 'Pinjaman & Pembiayaan', icon: 'hand-coins' },
+                    { id: 'debts', label: 'Hutang Desa', icon: 'credit-card' },
                     { id: 'bku', label: 'Buku Kas Umum (BKU)', icon: 'book-open' },
                     { id: 'reports', label: 'Laporan Keuangan', icon: 'file-text' },
                     { id: 'cash_management', label: 'Manajemen Kas & Bank', icon: 'landmark' },
@@ -1662,7 +1938,7 @@
                     </div>
 
                     <div className="w-full overflow-x-auto pt-2 pb-2">
-                      <div className="min-w-[650px] h-[300px] relative">
+                      <div className="w-full sm:min-w-[650px] h-[260px] sm:h-[300px] relative">
                         {(() => {
                           const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
                           const data = monthlyChartData;
@@ -1927,6 +2203,339 @@
                       <p className="text-slate-300"><b>Sekretaris Desa:</b> {villageProfile.secretary}</p>
                       <p className="text-slate-300"><b>Kaur Keuangan:</b> {villageProfile.treasurer}</p>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {activeMenu === 'debts' && (
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/15">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-100">Pencatatan & Manajemen Hutang Desa</h2>
+                      <p className="text-xs text-slate-400">Pencatatan kewajiban finansial pihak desa (Transaksi ini murni administratif dan **tidak mempengaruhi kas desa sama sekali**)</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleDownloadDebtXLSX}
+                        className="bg-blue-600/80 hover:bg-blue-500 text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-blue-400/40 transition"
+                      >
+                        <i data-lucide="download" className="w-4 h-4"></i> Unduh Excel
+                      </button>
+                      {userPermissions.canEdit && (
+                        <button
+                          onClick={() => {
+                            setEditingDebt(null);
+                            setDebtForm({ creditor: '', amount: '', description: '', date: new Date().toISOString().split('T')[0], dueDate: '-', status: 'Belum' });
+                            setIsModalDebtOpen(true);
+                          }}
+                          className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30 transition"
+                        >
+                          <i data-lucide="plus" className="w-4 h-4"></i> Tambah Hutang Baru
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300">
+                          <th className="p-3">ID / Tanggal</th>
+                          <th className="p-3">Pemberi Hutang (Kreditur)</th>
+                          <th className="p-3">Keterangan / Keperluan</th>
+                          <th className="p-3 text-right">Nominal (Rp)</th>
+                          <th className="p-3">Jatuh Tempo</th>
+                          <th className="p-3 text-center">Status</th>
+                          {userPermissions.canEdit && <th className="p-3 text-center">Aksi</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/10">
+                        {villageDebts.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="p-6 text-center text-slate-400 italic">Belum ada data hutang desa tercatat</td>
+                          </tr>
+                        ) : (
+                          villageDebts.map((d, idx) => (
+                            <tr key={d.idKey || idx} className="hover:bg-white/[0.05] transition">
+                              <td className="p-3">
+                                <span className="font-mono font-bold text-amber-400 block">{d.id}</span>
+                                <span className="text-slate-400 text-[10px]">{d.date}</span>
+                              </td>
+                              <td className="p-3 font-bold text-slate-100">{d.creditor}</td>
+                              <td className="p-3 text-slate-300">{d.description}</td>
+                              <td className="p-3 text-right font-black text-amber-400">{formatIDR(d.amount)}</td>
+                              <td className="p-3 text-slate-300">{d.dueDate}</td>
+                              <td className="p-3 text-center">
+                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${d.status === 'Lunas' ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30' : 'bg-rose-950/40 text-rose-300 border-rose-500/30'}`}>
+                                  {d.status}
+                                </span>
+                              </td>
+                              {userPermissions.canEdit && (
+                                <td className="p-3 text-center flex items-center justify-center gap-1.5">
+                                  <button
+                                    onClick={() => {
+                                      setEditingDebt(d);
+                                      setDebtForm({ creditor: d.creditor, amount: d.amount, description: d.description, date: d.date, dueDate: d.dueDate, status: d.status });
+                                      setIsModalDebtOpen(true);
+                                    }}
+                                    className="bg-amber-950/30 text-amber-300 hover:bg-amber-900/40 border border-amber-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 backdrop-blur-3xl"
+                                    title="Edit Hutang"
+                                  >
+                                    <i data-lucide="edit" className="w-3.5 h-3.5"></i> Edit
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteDebt(d)}
+                                    className="bg-rose-950/30 text-rose-300 hover:bg-rose-900/40 border border-rose-500/30 px-2.5 py-1 rounded-lg font-bold flex items-center gap-1 backdrop-blur-3xl"
+                                    title="Hapus Hutang"
+                                  >
+                                    <i data-lucide="trash-2" className="w-3.5 h-3.5"></i> Hapus
+                                  </button>
+                                </td>
+                              )}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL INPUT / EDIT HUTANG DESA */}
+              {isModalDebtOpen && (
+                <div className="fixed inset-0 z-50 bg-transparent flex items-center justify-center p-4 pointer-events-auto">
+                  <div className="bg-slate-950/90 rounded-3xl max-w-md w-full p-6 shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/20 space-y-5 text-slate-100 backdrop-blur-none">
+                    
+                    <div className="flex justify-between items-center border-b border-white/15 pb-3">
+                      <h3 className="font-bold text-base text-slate-100">{editingDebt ? 'Edit Catatan Hutang Desa' : 'Tambah Hutang Desa Baru'}</h3>
+                      <button onClick={() => setIsModalDebtOpen(false)} className="text-slate-400 hover:text-white transition">
+                        <i data-lucide="x-circle" className="w-5 h-5"></i>
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleSaveDebt} className="space-y-4 text-xs">
+                      <div>
+                        <label className="font-bold block mb-1 text-slate-300">Pemberi Hutang / Kreditur</label>
+                        <input 
+                          type="text" 
+                          placeholder="Contoh: PT. Sumber Material / Bank / Pihak Ketiga..." 
+                          value={debtForm.creditor}
+                          onChange={(e) => setDebtForm({ ...debtForm, creditor: e.target.value })}
+                          className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-amber-500"
+                          required
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="font-bold block mb-1 text-slate-300">Tanggal Catat</label>
+                          <input 
+                            type="date" 
+                            value={debtForm.date}
+                            onChange={(e) => setDebtForm({ ...debtForm, date: e.target.value })}
+                            className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-amber-500"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="font-bold block mb-1 text-slate-300">Jatuh Tempo</label>
+                          <input 
+                            type="text" 
+                            placeholder="Contoh: 31 Desember 2026" 
+                            value={debtForm.dueDate}
+                            onChange={(e) => setDebtForm({ ...debtForm, dueDate: e.target.value })}
+                            className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="font-bold block mb-1 text-slate-300">Nominal Hutang (Rp)</label>
+                          <input 
+                            type="number" 
+                            placeholder="0" 
+                            value={debtForm.amount}
+                            onChange={(e) => setDebtForm({ ...debtForm, amount: e.target.value })}
+                            className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-bold shadow-inner focus:outline-none focus:border-amber-500"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label className="font-bold block mb-1 text-slate-300">Status Pelunasan</label>
+                          <select
+                            value={debtForm.status}
+                            onChange={(e) => setDebtForm({ ...debtForm, status: e.target.value })}
+                            className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-bold shadow-inner focus:outline-none focus:border-amber-500"
+                          >
+                            <option value="Belum">Belum (Belum Lunas)</option>
+                            <option value="Lunas">Lunas</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="font-bold block mb-1 text-slate-300">Keterangan / Keperluan</label>
+                        <input 
+                          type="text" 
+                          placeholder="Contoh: Talangan pengadaan material bangunan..." 
+                          value={debtForm.description}
+                          onChange={(e) => setDebtForm({ ...debtForm, description: e.target.value })}
+                          className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div className="pt-3 flex gap-2 justify-end">
+                        <button type="button" onClick={() => setIsModalDebtOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] transition">Batal</button>
+                        <button type="submit" className="px-5 py-2.5 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-white font-bold shadow-lg shadow-amber-950 border border-amber-400/45 transition">Simpan Hutang</button>
+                      </div>
+                    </form>
+
+                  </div>
+                </div>
+              )}
+
+              {activeMenu === 'loans' && (
+                <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/15">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-100">Manajemen Pinjaman & Pembiayaan Desa</h2>
+                      <p className="text-xs text-slate-400">Pencairan mengurangi kas/kegiatan (Pengeluaran), Pengembalian menambah kas/kegiatan (Pendapatan)</p>
+                    </div>
+                    {userPermissions.canEdit && (
+                      <button
+                        onClick={() => setIsModalLoanOpen(true)}
+                        className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
+                      >
+                        <i data-lucide="plus" className="w-4 h-4"></i> Catat Pinjaman Baru
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-white/15 bg-white/[0.04] text-slate-300">
+                          <th className="p-3">ID / Tanggal</th>
+                          <th className="p-3">Peminjam / Pihak Terkait</th>
+                          <th className="p-3">Kegiatan Terkait</th>
+                          <th className="p-3">Keterangan</th>
+                          <th className="p-3 text-right">Nominal (Rp)</th>
+                          <th className="p-3 text-center">Status</th>
+                          <th className="p-3 text-center">Aksi Pelunasan</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/10">
+                        {loans.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="p-6 text-center text-slate-400 italic">Belum ada data pinjaman tercatat</td>
+                          </tr>
+                        ) : (
+                          loans.map((l, idx) => (
+                            <tr key={l.idKey || idx} className="hover:bg-white/[0.05] transition">
+                              <td className="p-3">
+                                <span className="font-mono font-bold text-emerald-400 block">{l.id}</span>
+                                <span className="text-slate-400 text-[10px]">{l.date}</span>
+                              </td>
+                              <td className="p-3 font-bold text-slate-100">{l.borrower}</td>
+                              <td className="p-3 font-medium text-emerald-300">{l.activity}</td>
+                              <td className="p-3 text-slate-300">{l.description}</td>
+                              <td className="p-3 text-right font-black text-rose-400">{formatIDR(l.amount)}</td>
+                              <td className="p-3 text-center">
+                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${l.status === 'Lunas' ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30' : 'bg-amber-950/40 text-amber-300 border-amber-500/30'}`}>
+                                  {l.status}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center">
+                                {l.status !== 'Lunas' && userPermissions.canEdit ? (
+                                  <button
+                                    onClick={() => handleReturnLoan(l)}
+                                    className="bg-emerald-600/80 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg font-bold text-[11px] shadow border border-emerald-400/40 transition"
+                                  >
+                                    Terima Pengembalian
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-500 text-[11px] italic">Selesai</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* MODAL INPUT PINJAMAN */}
+              {isModalLoanOpen && (
+                <div className="fixed inset-0 z-50 bg-transparent flex items-center justify-center p-4 pointer-events-auto">
+                  <div className="bg-slate-950/90 rounded-3xl max-w-md w-full p-6 shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/20 space-y-5 text-slate-100 backdrop-blur-none">
+                    
+                    <div className="flex justify-between items-center border-b border-white/15 pb-3">
+                      <h3 className="font-bold text-base text-slate-100">Pencatatan Pinjaman Dana Baru</h3>
+                      <button onClick={() => setIsModalLoanOpen(false)} className="text-slate-400 hover:text-white transition">
+                        <i data-lucide="x-circle" className="w-5 h-5"></i>
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleSaveLoan} className="space-y-4 text-xs">
+                      <div>
+                        <label className="font-bold block mb-1 text-slate-300">Nama Peminjam / Penerima</label>
+                        <input 
+                          type="text" 
+                          placeholder="Contoh: BUMDes / Kelompok Tani..." 
+                          value={loanForm.borrower}
+                          onChange={(e) => setLoanForm({ ...loanForm, borrower: e.target.value })}
+                          className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="font-bold block mb-1 text-slate-300">Pilih Kegiatan Terkait</label>
+                        <select
+                          value={loanForm.activity}
+                          onChange={(e) => setLoanForm({ ...loanForm, activity: e.target.value })}
+                          className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-medium shadow-inner focus:outline-none focus:border-emerald-500"
+                          required
+                        >
+                          <option value="" className="bg-slate-900 text-slate-200">-- Pilih Kegiatan --</option>
+                          {availableActivities.map((act, idx) => (
+                            <option key={idx} value={act} className="bg-slate-900 text-slate-200">{act}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="font-bold block mb-1 text-slate-300">Nominal Pinjaman (Rp)</label>
+                        <input 
+                          type="number" 
+                          placeholder="0" 
+                          value={loanForm.amount}
+                          onChange={(e) => setLoanForm({ ...loanForm, amount: e.target.value })}
+                          className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-bold shadow-inner focus:outline-none focus:border-emerald-500"
+                          required
+                        />
+                      </div>
+
+                      <div>
+                        <label className="font-bold block mb-1 text-slate-300">Keterangan / Keperluan</label>
+                        <input 
+                          type="text" 
+                          placeholder="Contoh: Modal tambahan unit usaha..." 
+                          value={loanForm.description}
+                          onChange={(e) => setLoanForm({ ...loanForm, description: e.target.value })}
+                          className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div className="pt-3 flex gap-2 justify-end">
+                        <button type="button" onClick={() => setIsModalLoanOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] transition">Batal</button>
+                        <button type="submit" className="px-5 py-2.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/45 transition">Simpan & Cairkan</button>
+                      </div>
+                    </form>
+
                   </div>
                 </div>
               )}
@@ -2898,27 +3507,32 @@
           </div>
 
           {/* MODAL TRANSAKSI */}
+          {/* MODAL TRANSAKSI */}
           {isModalTrxOpen && (
-            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
-              <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-white/25 space-y-5">
+            <div className="fixed inset-0 z-50 bg-transparent flex items-center justify-center p-4 pointer-events-auto">
+              <div className="bg-slate-950/90 rounded-3xl max-w-lg w-full p-6 shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/20 space-y-5 text-slate-100 backdrop-blur-none">
+                
                 <div className="flex justify-between items-center border-b border-white/15 pb-3">
                   <h3 className="font-bold text-base text-slate-100">{editingTrx ? 'Edit Transaksi' : `Pencatatan Transaksi ${trxType}`} (Cloud)</h3>
-                  <button onClick={() => setIsModalTrxOpen(false)} className="text-slate-400 hover:text-white"><i data-lucide="x-circle" className="w-5 h-5"></i></button>
+                  <button onClick={() => setIsModalTrxOpen(false)} className="text-slate-400 hover:text-white transition">
+                    <i data-lucide="x-circle" className="w-5 h-5"></i>
+                  </button>
                 </div>
+
                 <form onSubmit={handleSaveTransaction} className="space-y-4 text-xs">
                   <div>
                     <label className="font-bold block mb-1 text-slate-300">Kategori APBDes</label>
                     <select 
                       value={formData.category}
                       onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                      className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-medium shadow-inner focus:outline-none focus:border-emerald-500"
                       required
                     >
-                      <option value="">-- Pilih Kategori --</option>
+                      <option value="" className="bg-slate-900 text-slate-200">-- Pilih Kategori --</option>
                       {budgetItems.filter(b => trxType === 'Pendapatan' ? b.category === 'Pendapatan' : b.category === 'Belanja').map(b => (
-                        <option key={b.id} value={b.name} className="bg-slate-900">{b.code} - {b.name}</option>
+                        <option key={b.id} value={b.name} className="bg-slate-900 text-slate-200">{b.code} - {b.name}</option>
                       ))}
-                      <option value="Lainnya" className="bg-slate-900">➕ Lainnya (Input Kategori Baru...)</option>
+                      <option value="Lainnya" className="bg-slate-900 text-slate-200">➕ Lainnya (Input Kategori Baru...)</option>
                     </select>
                     {formData.category === 'Lainnya' && (
                       <input
@@ -2926,7 +3540,7 @@
                         placeholder="Masukkan nama Kategori baru..."
                         value={formData.customCategory}
                         onChange={(e) => setFormData({ ...formData, customCategory: e.target.value })}
-                        className="w-full mt-2 p-2.5 rounded-xl border border-emerald-500/50 bg-emerald-950/40 text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                        className="w-full mt-2 p-2.5 rounded-xl border border-emerald-500/50 bg-slate-900 text-slate-100 font-medium shadow-inner"
                         required
                       />
                     )}
@@ -2936,7 +3550,7 @@
                     <div className="flex justify-between items-center mb-1">
                       <label className="font-bold text-slate-300">Kegiatan Terkait (Opsional)</label>
                       {formData.activity && formData.activity !== '-' && formData.activity !== 'Lainnya' && (
-                        <span className="text-[11px] bg-emerald-950/80 text-emerald-300 px-2 py-0.5 rounded-md font-bold border border-emerald-500/30">
+                        <span className="text-[11px] bg-emerald-950 text-emerald-300 px-2 py-0.5 rounded-md font-bold border border-emerald-500/30">
                           Saldo Kegiatan: {formatIDR(getActivityBalance(formData.activity))}
                         </span>
                       )}
@@ -2951,23 +3565,23 @@
                           customActivity: val === 'Lainnya' ? formData.customActivity : '' 
                         });
                       }}
-                      className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-medium shadow-inner focus:outline-none focus:border-emerald-500"
                     >
-                      <option value="">-- Tanpa Kegiatan Khusus / Umum --</option>
+                      <option value="" className="bg-slate-900 text-slate-200">-- Tanpa Kegiatan Khusus / Umum --</option>
                       {availableActivities.map((act, idx) => (
-                        <option key={idx} value={act} className="bg-slate-900">{act} (Saldo: {formatIDR(getActivityBalance(act))})</option>
+                        <option key={idx} value={act} className="bg-slate-900 text-slate-200">{act} (Saldo: {formatIDR(getActivityBalance(act))})</option>
                       ))}
-                      <option value="Lainnya" className="bg-slate-900">➕ Tambah Jenis Kegiatan Baru...</option>
+                      <option value="Lainnya" className="bg-slate-900 text-slate-200">➕ Tambah Jenis Kegiatan Baru...</option>
                     </select>
 
                     {formData.activity === 'Lainnya' && (
                       <div className="mt-2 space-y-1">
                         <input
                           type="text"
-                          placeholder="Ketik nama kegiatan baru (Contoh: Operasional PAUD)..."
+                          placeholder="Ketik nama kegiatan baru..."
                           value={formData.customActivity}
                           onChange={(e) => setFormData({ ...formData, customActivity: e.target.value })}
-                          className="w-full p-2.5 rounded-xl border border-emerald-500/50 bg-emerald-950/40 text-slate-100 font-medium backdrop-blur-3xl shadow-inner"
+                          className="w-full p-2.5 rounded-xl border border-emerald-500/50 bg-slate-900 text-slate-100 font-medium shadow-inner"
                           autoFocus
                           required
                         />
@@ -2982,19 +3596,20 @@
                       placeholder="Contoh: Pembayaran Honor..." 
                       value={formData.description}
                       onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner"
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500"
                       required
                     />
                   </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="font-bold block mb-1 text-slate-300">Rekening Kas</label>
                       <select 
                         value={formData.accountId}
                         onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
-                        className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner"
+                        className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500"
                       >
-                        {accounts.map(a => (<option key={a.id} value={a.id} className="bg-slate-900">{a.name}</option>))}
+                        {accounts.map(a => (<option key={a.id} value={a.id} className="bg-slate-900 text-slate-200">{a.name}</option>))}
                       </select>
                     </div>
                     <div>
@@ -3004,80 +3619,166 @@
                         placeholder="0" 
                         value={formData.amount}
                         onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                        className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-bold backdrop-blur-3xl shadow-inner"
+                        className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-bold shadow-inner focus:outline-none focus:border-emerald-500"
                         required
                       />
                     </div>
                   </div>
+
                   <div className="pt-3 flex gap-2 justify-end">
-                    <button type="button" onClick={() => setIsModalTrxOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] backdrop-blur-3xl">Batal</button>
-                    <button type="submit" className="px-5 py-2.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/40 backdrop-blur-3xl">Simpan Perubahan</button>
+                    <button type="button" onClick={() => setIsModalTrxOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] transition">Batal</button>
+                    <button type="submit" className="px-5 py-2.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/45 transition">Simpan Perubahan</button>
                   </div>
                 </form>
+
               </div>
             </div>
           )}
 
           {/* MODAL MASTER DESA */}
           {isModalMasterOpen && (
-            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
-              <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-white/25 space-y-5">
+            <div className="fixed inset-0 z-50 bg-transparent flex items-center justify-center p-4 pointer-events-auto">
+              <div className="bg-slate-950/90 rounded-3xl max-w-lg w-full p-6 shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/20 space-y-5 text-slate-100 backdrop-blur-none">
+                
                 <div className="flex justify-between items-center border-b border-white/15 pb-3">
                   <h3 className="font-bold text-base text-slate-100">Edit Data Master & Pejabat Desa</h3>
-                  <button onClick={() => setIsModalMasterOpen(false)} className="text-slate-400 hover:text-white"><i data-lucide="x-circle" className="w-5 h-5"></i></button>
+                  <button onClick={() => setIsModalMasterOpen(false)} className="text-slate-400 hover:text-white transition">
+                    <i data-lucide="x-circle" className="w-5 h-5"></i>
+                  </button>
                 </div>
+
                 <form onSubmit={handleSaveMaster} className="space-y-3 text-xs">
                   <div>
                     <label className="font-bold block mb-1 text-slate-300">Nama Desa</label>
-                    <input type="text" value={masterForm.name} onChange={e => setMasterForm({...masterForm, name: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                    <input 
+                      type="text" 
+                      value={masterForm.name} 
+                      onChange={e => setMasterForm({...masterForm, name: e.target.value})} 
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" 
+                      required 
+                    />
                   </div>
+
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="font-bold block mb-1 text-slate-300">Kecamatan</label>
-                      <input type="text" value={masterForm.district} onChange={e => setMasterForm({...masterForm, district: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                      <input 
+                        type="text" 
+                        value={masterForm.district} 
+                        onChange={e => setMasterForm({...masterForm, district: e.target.value})} 
+                        className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" 
+                        required 
+                      />
                     </div>
                     <div>
                       <label className="font-bold block mb-1 text-slate-300">Kabupaten</label>
-                      <input type="text" value={masterForm.regency} onChange={e => setMasterForm({...masterForm, regency: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                      <input 
+                        type="text" 
+                        value={masterForm.regency} 
+                        onChange={e => setMasterForm({...masterForm, regency: e.target.value})} 
+                        className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" 
+                        required 
+                      />
                     </div>
                   </div>
+
                   <div>
                     <label className="font-bold block mb-1 text-slate-300">Kepala Desa</label>
-                    <input type="text" value={masterForm.headOfVillage} onChange={e => setMasterForm({...masterForm, headOfVillage: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                    <input 
+                      type="text" 
+                      value={masterForm.headOfVillage} 
+                      onChange={e => setMasterForm({...masterForm, headOfVillage: e.target.value})} 
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" 
+                      required 
+                    />
                   </div>
+
                   <div>
                     <label className="font-bold block mb-1 text-slate-300">Sekretaris Desa</label>
-                    <input type="text" value={masterForm.secretary} onChange={e => setMasterForm({...masterForm, secretary: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                    <input 
+                      type="text" 
+                      value={masterForm.secretary} 
+                      onChange={e => setMasterForm({...masterForm, secretary: e.target.value})} 
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" 
+                      required 
+                    />
                   </div>
+
                   <div>
                     <label className="font-bold block mb-1 text-slate-300">Kaur Keuangan</label>
-                    <input type="text" value={masterForm.treasurer} onChange={e => setMasterForm({...masterForm, treasurer: e.target.value})} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 backdrop-blur-3xl shadow-inner" required />
+                    <input 
+                      type="text" 
+                      value={masterForm.treasurer} 
+                      onChange={e => setMasterForm({...masterForm, treasurer: e.target.value})} 
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" 
+                      required 
+                    />
                   </div>
+
                   <div className="pt-3 flex gap-2 justify-end">
-                    <button type="button" onClick={() => setIsModalMasterOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] backdrop-blur-3xl">Batal</button>
-                    <button type="submit" className="px-5 py-2.5 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/40 backdrop-blur-3xl">Simpan Profil</button>
+                    <button 
+                      type="button" 
+                      onClick={() => setIsModalMasterOpen(false)} 
+                      className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] transition"
+                    >
+                      Batal
+                    </button>
+                    <button 
+                      type="submit" 
+                      className="px-5 py-2.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/45 transition"
+                    >
+                      Simpan Profil
+                    </button>
                   </div>
                 </form>
+
               </div>
             </div>
           )}
 
           {/* MODAL ANGGARAN */}
           {isModalBudgetOpen && editingBudget && (
-            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
-              <div className="bg-slate-950/60 backdrop-blur-[50px] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-white/25 space-y-4">
-                <h3 className="font-bold text-base text-slate-100">Edit Pagu Anggaran</h3>
-                <p className="text-xs text-slate-400">{editingBudget.name}</p>
+            <div className="fixed inset-0 z-50 bg-transparent flex items-center justify-center p-4 pointer-events-auto">
+              <div className="bg-slate-950/90 rounded-3xl max-w-sm w-full p-6 shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/20 space-y-4 text-slate-100 backdrop-blur-none">
+                
+                <div className="flex justify-between items-center border-b border-white/15 pb-3">
+                  <h3 className="font-bold text-base text-slate-100">Edit Pagu Anggaran</h3>
+                  <button onClick={() => setIsModalBudgetOpen(false)} className="text-slate-400 hover:text-white transition">
+                    <i data-lucide="x-circle" className="w-5 h-5"></i>
+                  </button>
+                </div>
+
+                <p className="text-xs text-slate-400 font-medium">{editingBudget.name}</p>
+
                 <form onSubmit={handleSaveBudget} className="space-y-3 text-xs">
                   <div>
                     <label className="font-bold block mb-1 text-slate-300">Pagu Anggaran (Rp)</label>
-                    <input type="number" value={budgetForm.budget} onChange={e => setBudgetForm({ budget: e.target.value })} className="w-full p-2.5 rounded-xl border border-white/20 bg-white/[0.04] text-slate-100 font-bold backdrop-blur-3xl shadow-inner" required />
+                    <input 
+                      type="number" 
+                      value={budgetForm.budget} 
+                      onChange={e => setBudgetForm({ budget: e.target.value })} 
+                      className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 font-bold shadow-inner focus:outline-none focus:border-emerald-500" 
+                      required 
+                    />
                   </div>
+
                   <div className="pt-2 flex gap-2 justify-end">
-                    <button type="button" onClick={() => setIsModalBudgetOpen(false)} className="px-3.5 py-2 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] backdrop-blur-3xl">Batal</button>
-                    <button type="submit" className="px-4 py-2 rounded-xl bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/40 backdrop-blur-3xl">Simpan</button>
+                    <button 
+                      type="button" 
+                      onClick={() => setIsModalBudgetOpen(false)} 
+                      className="px-3.5 py-2 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] transition"
+                    >
+                      Batal
+                    </button>
+                    <button 
+                      type="submit" 
+                      className="px-4 py-2 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-950 border border-emerald-400/45 transition"
+                    >
+                      Simpan
+                    </button>
                   </div>
                 </form>
+
               </div>
             </div>
           )}
