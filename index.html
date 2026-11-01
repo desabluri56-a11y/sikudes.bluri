@@ -102,28 +102,28 @@
         id: 'kades', 
         name: 'Kepala Desa',
         email: 'kades@bluri.desa.id',
-        password: 'KadesBluri#99',
+        password: 'kades',
         info: 'Otorisator Utama: Persetujuan APBDes, Pengesahan Belanja, Monitoring Real-time'
       },
       { 
         id: 'sekdes', 
         name: 'Sekretaris Desa',
         email: 'sekdes@bluri.desa.id',
-        password: 'Sekdes2026Password!',
+        password: 'sekdes',
         info: 'Verifikator Administrasi: Penyusunan RAK/DPA, Pengawasan Berkas Transaksi'
       },
       { 
         id: 'kasi', 
         name: 'Kaur / Kasi Pelaksana',
         email: 'kasi@bluri.desa.id',
-        password: 'Kasipelaksana#123',
+        password: 'bayan',
         info: 'Pelaksana Kegiatan: Pengajuan Transaksi Belanja Bidang & Program Desa'
       },
       { 
         id: 'auditor', 
         name: 'Auditor / Pengawas Inspektorat',
         email: 'auditor@lamongankab.go.id',
-        password: 'Inspektorat2026Audit',
+        password: 'audit',
         info: 'Pengawas Eksternal: Mode Read-Only untuk Audit BKU, Laporan & History Log'
       }
     ];
@@ -178,6 +178,12 @@
 
       // TAMBAHKAN STATE INI UNTUK SIDEBAR MOBILE:
       const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+      const capitalizeWords = (str) => {
+      return str.replace(/\w\S*/g, (txt) => {
+        return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
+      });
+      };
       
       const [isAuthenticated, setIsAuthenticated] = useState(false);
       const [currentUser, setCurrentUser] = useState(null);
@@ -210,7 +216,7 @@
       ]);
 
       const [budgetItems, setBudgetItems] = useState([
-        { id: '4.1', code: '4.1', category: 'Pendapatan', name: 'Pendapatan Asli Desa (PAD)', budget: 0, realization: 0 },
+        { id: '4.1', code: '4.1', category: 'Pendapatan', name: 'Pendapatan Asli Desa (PAD)', budget: 100000000, realization: 0 },
         { id: '4.2', code: '4.2', category: 'Pendapatan', name: 'Dana Desa (DD)', budget: 0, realization: 0 },
         { id: '4.3', code: '4.3', category: 'Pendapatan', name: 'Alokasi Dana Desa (ADD)', budget: 0, realization: 0 },
         { id: '4.4', code: '4.4', category: 'Pendapatan', name: 'Bagi Hasil Pajak (BHP)', budget: 0, realization: 0 },
@@ -221,7 +227,7 @@
         { id: '5.2', code: '5.2', category: 'Belanja', name: 'Alokasi Dana Desa (ADD)', budget: 0, realization: 0 },
         { id: '5.3', code: '5.3', category: 'Belanja', name: 'Dana Desa (DD)', budget: 0, realization: 0 },
         { id: '5.4', code: '5.4', category: 'Belanja', name: 'Bagi Hasil Pajak (BHP)', budget: 0, realization: 0 },
-        { id: '5.5', code: '5.5', category: 'Belanja', name: 'Pinjaman dan Dana tak terduga', budget: 0, realization: 0 },
+        { id: '5.5', code: '5.5', category: 'Belanja', name: 'Pinjaman dan Dana Tak terduga', budget: 0, realization: 0 },
         { id: '5.7', code: '5.7', category: 'Belanja', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
       ]);
 
@@ -254,7 +260,9 @@
       const [revenuePage, setRevenuePage] = useState(1);
       const [expenditurePage, setExpenditurePage] = useState(1);
       const [bkuPage, setBkuPage] = useState(1);
+      const [auditPage, setAuditPage] = useState(1);
       const itemsPerPage = 10;
+      
 
       const [isModalTrxOpen, setIsModalTrxOpen] = useState(false);
       const [trxType, setTrxType] = useState('Pendapatan');
@@ -390,33 +398,100 @@
       };
 
       const userPermissions = useMemo(() => {
-        if (!currentUser) return { canEdit: false, canImport: false, canReset: false, isAuditor: true };
+        if (!currentUser) return { canEdit: false, canImport: false, canReset: false, allowedMenus: [] };
         const role = currentUser.role;
-        return {
-          canEdit: ['admin', 'kaur_keuangan', 'kades', 'sekdes'].includes(role),
-          canImport: ['admin', 'kaur_keuangan'].includes(role),
-          canReset: ['admin', 'kaur_keuangan'].includes(role),
-          isAuditor: role === 'auditor'
-        };
+
+        // Administrator & Kaur Keuangan: Akses penuh
+        if (role === 'admin' || role === 'kaur_keuangan') {
+          return {
+            canEdit: true,
+            canImport: true,
+            canReset: role === 'admin',
+            allowedMenus: ['dashboard', 'master', 'budgeting', 'revenue', 'expenditure', 'bku', 'reports', 'cash_management', 'audit']
+          };
+        }
+
+        // Kepala Desa (Kades): Hanya melihat menu tertentu (Read-Only)
+        if (role === 'kades') {
+          return {
+            canEdit: false,
+            canImport: false,
+            canReset: false,
+            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku', 'cash_management']
+          };
+        }
+
+        // Sekretaris Desa (Sekdes): Hanya melihat menu tertentu (Read-Only)
+        if (role === 'sekdes') {
+          return {
+            canEdit: false,
+            canImport: false,
+            canReset: false,
+            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku', 'cash_management', 'reports', 'audit']
+          };
+        }
+
+        // Kasi Pelaksana (Kasi): Hanya melihat menu tertentu (Read-Only)
+        if (role === 'kasi') {
+          return {
+            canEdit: false,
+            canImport: false,
+            canReset: false,
+            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku']
+          };
+        }
+
+        // Auditor: Mode Read-Only untuk laporan & BKU
+        if (role === 'auditor') {
+          return {
+            canEdit: false,
+            canImport: false,
+            canReset: false,
+            allowedMenus: ['dashboard', 'bku', 'reports', 'audit']
+          };
+        }
+
+        return { canEdit: false, canImport: false, canReset: false, allowedMenus: ['dashboard'] };
       }, [currentUser]);
 
       const availableActivities = useMemo(() => {
         const setAct = new Set();
-        setAct.add('Pendapatan Asli Desa (PAD)');
-        setAct.add('Alokasi Dana Desa (ADD)');
-        setAct.add('Dana Desa (DD)');
-        setAct.add('Operasional PAUD');
-        setAct.add('Operasional POSYANDU');
         
+        // Daftar default yang sudah distandarisasi huruf kapital/kecilnya
+        const defaultActs = [
+          'Pendapatan Asli Desa (PAD)',
+          'Alokasi Dana Desa (ADD)',
+          'Dana Desa (DD)',
+          'Operasional PAUD',
+          'Operasional POSYANDU',
+          'Pembangunan Infrastruktur Desa',
+          'Pemberdayaan Masyarakat',
+          'Pinjaman dan Dana Tak Terduga',
+          'Pajak PPB dan Iuran RK'
+        ];
+        
+        defaultActs.forEach(act => setAct.add(act));
+        
+        // Map untuk menampung bentuk unik berdasarkan huruf kecil agar tidak duplikat
+        const uniqueMap = new Map();
+        defaultActs.forEach(act => {
+          uniqueMap.set(act.toLowerCase().trim(), act);
+        });
+
         transactions.forEach(t => {
-          if (t.activity && t.activity !== '-' && t.activity.trim() !== '') {
-            setAct.add(t.activity);
-          }
-          if (t.category && t.category.trim() !== '') {
-            setAct.add(t.category);
+          let rawAct = t.activity && t.activity !== '-' ? t.activity : (t.category || '');
+          if (rawAct && rawAct.trim() !== '') {
+            const cleanAct = rawAct.trim();
+            const lowerKey = cleanAct.toLowerCase();
+            
+            // Jika belum ada dalam bentuk case-insensitive, masukkan
+            if (!uniqueMap.has(lowerKey)) {
+              uniqueMap.set(lowerKey, cleanAct);
+            }
           }
         });
-        return Array.from(setAct);
+
+        return Array.from(uniqueMap.values());
       }, [transactions]);
 
       const getActivityBalance = (activityName) => {
@@ -1155,111 +1230,118 @@
       if (!isAuthenticated) {
         return (
           <div className="min-h-screen bg-gradient-to-br from-[#040812] via-[#091322] to-[#020710] flex items-center justify-center p-4 font-sans text-slate-100 selection:bg-emerald-500 selection:text-white relative overflow-hidden">
-            <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-emerald-500/20 rounded-full blur-[150px] pointer-events-none"></div>
-            <div className="absolute bottom-1/4 right-1/4 w-[500px] h-[500px] bg-teal-500/15 rounded-full blur-[150px] pointer-events-none"></div>
+            <div className="absolute top-1/4 left-1/4 w-[400px] h-[400px] bg-emerald-500/15 rounded-full blur-[130px] pointer-events-none"></div>
+            <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-teal-500/10 rounded-full blur-[130px] pointer-events-none"></div>
 
-            <div className="w-full max-w-5xl bg-white/[0.03] backdrop-blur-[40px] rounded-3xl overflow-hidden border border-white/15 shadow-[0_16px_48px_0_rgba(0,0,0,0.6)] flex flex-col md:flex-row min-h-[520px] relative z-10">
-              <div className="w-full md:w-5/12 bg-emerald-950/20 backdrop-blur-[40px] p-8 flex flex-col justify-between relative overflow-hidden border-r border-white/15">
-                <div className="absolute top-0 left-0 right-0 h-48 bg-gradient-to-b from-emerald-400/15 to-transparent pointer-events-none"></div>
-                <div className="space-y-6 relative z-10">
+            {/* CONTAINER UTAMA DIPERKECIL MENJADI MAX-W-3XL & PADDING LEBIH RAPAT */}
+            <div className="w-full max-w-3xl bg-white/[0.03] backdrop-blur-[40px] rounded-3xl overflow-hidden border border-white/15 shadow-[0_16px_48px_0_rgba(0,0,0,0.6)] flex flex-col md:flex-row relative z-10">
+              
+              {/* SISI KIRI (DIPERKECIL PADDING-NYA AGAR PAS & TIDAK ADA RUANG KOSONG) */}
+              <div className="w-full md:w-5/12 bg-emerald-950/20 backdrop-blur-[40px] p-6 md:p-8 flex flex-col justify-between relative overflow-hidden border-r border-white/15">
+                <div className="absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-emerald-400/15 to-transparent pointer-events-none"></div>
+                
+                <div className="space-y-5 relative z-10">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-3xl border border-white/25 flex items-center justify-center text-white text-2xl shadow-inner">
+                    <div className="w-10 h-10 rounded-xl bg-white/10 backdrop-blur-3xl border border-white/25 flex items-center justify-center text-white text-xl shadow-inner">
                       🏛️
                     </div>
                     <div>
-                      <h1 className="text-xl font-black tracking-tight text-white leading-tight">SIKUDES DESA BLURI</h1>
-                      <p className="text-xs text-emerald-200 font-medium">Sistem Keuangan Desa Bluri Digital</p>
+                      <h1 className="text-base font-black tracking-tight text-white leading-tight">SIKUDES DESA BLURI</h1>
+                      <p className="text-[11px] text-emerald-200 font-medium">Sistem Keuangan Desa Bluri</p>
                     </div>
                   </div>
 
-                  <div className="bg-white/[0.04] backdrop-blur-3xl rounded-2xl p-4 border border-white/15 space-y-1 shadow-inner">
-                    <p className="text-[10px] font-bold tracking-wider text-emerald-200 uppercase">Pemerintahan Desa</p>
-                    <h2 className="text-lg font-extrabold text-white">{villageProfile.name}</h2>
-                    <p className="text-xs text-emerald-100">{villageProfile.district}, {villageProfile.regency}</p>
-                    <p className="text-xs text-emerald-200/80">{villageProfile.province}</p>
+                  <div className="bg-white/[0.04] backdrop-blur-3xl rounded-xl p-3.5 border border-white/15 space-y-0.5 shadow-inner">
+                    <p className="text-[9px] font-bold tracking-wider text-emerald-200 uppercase">Pemerintahan Desa</p>
+                    <h2 className="text-base font-extrabold text-white">{villageProfile.name}</h2>
+                    <p className="text-[11px] text-emerald-100">{villageProfile.district}, {villageProfile.regency}</p>
+                    <p className="text-[11px] text-emerald-200/80">{villageProfile.province}</p>
                   </div>
                 </div>
 
-                <div className="pt-6 flex justify-between items-center text-[11px] text-emerald-200/60 font-medium relative z-10 border-t border-white/10">
-                  <span>Versi 4.2.0 • Ultra Clear</span>
-                  <span>Kabupaten Lamongan</span>
+                <div className="pt-4 mt-6 flex justify-between items-center text-[10px] text-emerald-200/60 font-medium relative z-10 border-t border-white/10">
+                  <span>Versi 4.2.0</span>
+                  <span>Kab. Lamongan</span>
                 </div>
               </div>
 
-              <div className="w-full md:w-7/12 p-8 md:p-10 flex flex-col justify-center bg-white/[0.02] backdrop-blur-[40px]">
-                <div className="max-w-md w-full mx-auto space-y-6">
+              {/* SISI KANAN (FORM LOGIN LEBIH COMPACT) */}
+              <div className="w-full md:w-7/12 p-6 md:p-8 flex flex-col justify-center bg-white/[0.02] backdrop-blur-[40px]">
+                <div className="w-full mx-auto space-y-5">
+                  
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2 text-emerald-400 font-bold text-xl">
-                      <i data-lucide="log-in" className="w-5 h-5"></i>
-                      <h2>Masuk ke Sistem</h2>
+                    <div className="flex items-center gap-2 text-emerald-400 font-bold text-lg">
+                      <i data-lucide="key-round" className="w-4 h-4"></i>
+                      <h2>Autentikasi Sandi Cepat</h2>
                     </div>
-                    <p className="text-xs text-slate-400">Pilih role hak akses dan masukkan kredensial sandi Anda.</p>
+                    <p className="text-[11px] text-slate-400">Masukkan kata sandi unik Anda untuk masuk ke sistem.</p>
                   </div>
 
-                  <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs">
+                  <form onSubmit={(e) => {
+                    e.preventDefault();
+                    setLoginError('');
+
+                    const matchedRole = INITIAL_ROLES.find(r => r.password === loginPassword);
+
+                    if (!matchedRole) {
+                      setLoginError('Kata sandi tidak dikenali. Silakan periksa kembali.');
+                      return;
+                    }
+
+                    const matchedUser = INITIAL_USERS.find(u => u.role === matchedRole.id);
+                    const userSession = {
+                      name: matchedUser ? matchedUser.name : 'Pengguna SIKUDES',
+                      email: matchedRole.email,
+                      role: matchedRole.id,
+                      roleName: matchedRole.name
+                    };
+
+                    setCurrentUser(userSession);
+                    setSelectedRoleId(matchedRole.id);
+                    setIsAuthenticated(true);
+                    setActiveMenu('dashboard');
+                    setLoginPassword('');
+                    showToast(`Selamat datang kembali, ${userSession.name} (${userSession.roleName})!`);
+                  }} className="space-y-4 text-xs">
+
                     {loginError && (
-                      <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 flex items-center gap-2">
+                      <div className="p-2.5 rounded-xl bg-rose-950/85 border border-rose-800 text-rose-300 flex items-center gap-2 shadow-lg text-[11px]">
                         <i data-lucide="alert-circle" className="w-4 h-4 shrink-0"></i>
                         <span>{loginError}</span>
                       </div>
                     )}
 
-                    <div>
-                      <label className="block font-bold text-slate-300 mb-1.5">Otoritas / Hak Akses (Role)</label>
+                    <div className="space-y-1.5">
+                      <label className="block font-bold text-slate-300">Kata Sandi Akses (Password)</label>
                       <div className="relative">
-                        <select
-                          value={selectedRoleId}
-                          onChange={(e) => handleRoleChange(e.target.value)}
-                          className="w-full bg-white/[0.04] border border-white/20 rounded-xl px-3.5 py-3 text-white font-semibold focus:outline-none focus:border-emerald-500 transition appearance-none cursor-pointer pr-10 backdrop-blur-3xl shadow-inner"
-                        >
-                          {INITIAL_ROLES.map(role => (
-                            <option key={role.id} value={role.id} className="bg-slate-900 text-slate-100">
-                              {role.name}
-                            </option>
-                          ))}
-                        </select>
-                        <i data-lucide="chevron-down" className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none"></i>
+                        <input
+                          type="password"
+                          value={loginPassword}
+                          onChange={(e) => setLoginPassword(e.target.value)}
+                          className="w-full bg-white/[0.04] border border-white/20 rounded-xl px-3.5 py-3 text-white focus:outline-none focus:border-emerald-500 transition font-mono text-sm placeholder-slate-500 backdrop-blur-3xl shadow-inner"
+                          placeholder="Masukkan sandi unik Anda..."
+                          autoFocus
+                          required
+                        />
                       </div>
-                      {currentRoleInfo && (
-                        <p className="text-[11px] text-emerald-400/90 mt-1.5 flex items-start gap-1 font-medium">
-                          <span className="font-bold">ℹ️</span> {currentRoleInfo}
-                        </p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block font-bold text-slate-300 mb-1.5">Email Pengguna</label>
-                      <input
-                        type="email"
-                        value={loginEmail}
-                        onChange={(e) => setLoginEmail(e.target.value)}
-                        className="w-full bg-white/[0.04] border border-white/20 rounded-xl px-3.5 py-3 text-white font-medium focus:outline-none focus:border-emerald-500 transition placeholder-slate-500 backdrop-blur-3xl shadow-inner"
-                        placeholder="nama@bluri.desa.id"
-                        required
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-bold text-slate-300 mb-1.5">Kata Sandi (Password Unik)</label>
-                      <input
-                        type="password"
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
-                        className="w-full bg-white/[0.04] border border-white/20 rounded-xl px-3.5 py-3 text-white focus:outline-none focus:border-emerald-500 transition font-mono placeholder-slate-500 backdrop-blur-3xl shadow-inner"
-                        placeholder="Masukkan sandi khusus role ini..."
-                        required
-                      />
+                      <p className="text-[10px] text-emerald-400/80 font-medium pt-0.5 flex items-center gap-1">
+                        <span>💡</span> Deteksi hak akses otomatis berdasarkan sandi.
+                      </p>
                     </div>
 
                     <button
                       type="submit"
-                      className="w-full bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 transition transform active:scale-[0.99] text-sm mt-2 border border-emerald-400/40 backdrop-blur-xl"
+                      className="w-full bg-emerald-600/80 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 transition transform active:scale-[0.99] text-xs border border-emerald-400/40 backdrop-blur-xl"
                     >
                       <i data-lucide="shield-check" className="w-4 h-4"></i> Masuk SIKUDES Cloud
                     </button>
                   </form>
+
+                  
+
                 </div>
               </div>
+
             </div>
           </div>
         );
@@ -1368,14 +1450,16 @@
                     { id: 'reports', label: 'Laporan Keuangan', icon: 'file-text' },
                     { id: 'cash_management', label: 'Manajemen Kas & Bank', icon: 'landmark' },
                     { id: 'audit', label: 'Audit Trail & Log', icon: 'history' }
-                  ].map(item => {
+                  ]
+                  .filter(item => userPermissions.allowedMenus.includes(item.id)) // <--- Filter menu otomatis sesuai role
+                  .map(item => {
                     const isActive = activeMenu === item.id;
                     return (
                       <button
                         key={item.id}
                         onClick={() => {
                           setActiveMenu(item.id);
-                          setIsSidebarOpen(false); // Otomatis menutup sidebar saat menu dipilih di HP
+                          setIsSidebarOpen(false);
                         }}
                         className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition backdrop-blur-xl ${
                           isActive 
@@ -1912,8 +1996,8 @@
                   </div>
                 </div>
               )}
-
-              {activeMenu === 'revenue' && (
+			  
+			{activeMenu === 'revenue' && (
                 <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
                   <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/15">
                     <div>
@@ -2764,17 +2848,49 @@
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/10">
-                        {auditLogs.map((log, idx) => (
-                          <tr key={log.idKey || idx} className="hover:bg-white/[0.05] transition">
-                            <td className="p-3 font-mono text-slate-400">{log.timestamp}</td>
-                            <td className="p-3 font-bold text-emerald-400">{log.user}</td>
-                            <td className="p-3"><span className="bg-white/[0.06] backdrop-blur-3xl px-2 py-0.5 rounded text-[10px] text-slate-300 border border-white/15">{log.module}</span></td>
-                            <td className="p-3 font-medium text-slate-200">{log.action}</td>
+                        {auditLogs.length === 0 ? (
+                          <tr>
+                            <td colSpan={4} className="p-6 text-center text-slate-400 italic">Belum ada riwayat audit log tercatat</td>
                           </tr>
-                        ))}
+                        ) : (
+                          auditLogs
+                            .slice((auditPage - 1) * itemsPerPage, auditPage * itemsPerPage)
+                            .map((log, idx) => (
+                              <tr key={log.idKey || idx} className="hover:bg-white/[0.05] transition">
+                                <td className="p-3 font-mono text-slate-400">{log.timestamp}</td>
+                                <td className="p-3 font-bold text-emerald-400">{log.user}</td>
+                                <td className="p-3"><span className="bg-white/[0.06] backdrop-blur-3xl px-2 py-0.5 rounded text-[10px] text-slate-300 border border-white/15">{log.module}</span></td>
+                                <td className="p-3 font-medium text-slate-200">{log.action}</td>
+                              </tr>
+                            ))
+                        )}
                       </tbody>
                     </table>
                   </div>
+
+                  {Math.ceil(auditLogs.length / itemsPerPage) > 1 && (
+                    <div className="flex justify-between items-center pt-2 text-xs">
+                      <span className="text-slate-400">
+                        Halaman {auditPage} dari {Math.ceil(auditLogs.length / itemsPerPage)}
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setAuditPage(prev => Math.max(prev - 1, 1))}
+                          disabled={auditPage === 1}
+                          className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                        >
+                          Sebelumnya
+                        </button>
+                        <button
+                          onClick={() => setAuditPage(prev => Math.min(prev + 1, Math.ceil(auditLogs.length / itemsPerPage)))}
+                          disabled={auditPage === Math.ceil(auditLogs.length / itemsPerPage)}
+                          className="px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/15 text-slate-200 disabled:opacity-40 font-semibold"
+                        >
+                          Berikutnya
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
