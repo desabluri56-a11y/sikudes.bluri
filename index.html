@@ -260,7 +260,7 @@
         { id: '4.2', code: '4.2', category: 'Pendapatan', name: 'Dana Desa (DD)', budget: 0, realization: 0 },
         { id: '4.3', code: '4.3', category: 'Pendapatan', name: 'Alokasi Dana Desa (ADD)', budget: 0, realization: 0 },
         { id: '4.4', code: '4.4', category: 'Pendapatan', name: 'Bagi Hasil Pajak (BHP)', budget: 0, realization: 0 },
-        { id: '4.5', code: '4.5', category: 'Pendapatan', name: 'Pinjaman dan dana tak terduga', budget: 0, realization: 0 },
+        { id: '4.5', code: '4.5', category: 'Pendapatan', name: 'Pinjaman dan Dana Tak terduga', budget: 0, realization: 0 },
         { id: '4.7', code: '4.7', category: 'Pendapatan', name: 'Pajak PPB dan Iuran RK', budget: 0, realization: 0 },
         
         { id: '5.1', code: '5.1', category: 'Belanja', name: 'Pendapatan Asli Desa (PAD)', budget: 0, realization: 0 },
@@ -282,7 +282,7 @@
       const getCategoryRealization = (categoryName) => {
         if (!transactions || transactions.length === 0) return 0;
         return transactions
-          .filter(t => (t.category || '').toLowerCase() === categoryName.toLowerCase())
+          .filter(t => (t.category || '').trim().toLowerCase() === categoryName.trim().toLowerCase())
           .reduce((sum, curr) => sum + Number(curr.amount || 0), 0);
       };
 
@@ -331,6 +331,8 @@
       const [isModalAccountOpen, setIsModalAccountOpen] = useState(false);
       const [editingAccount, setEditingAccount] = useState(null);
       const [accountForm, setAccountForm] = useState({ name: '', balance: '' });
+
+      const [deleteTargetTrx, setDeleteTargetTrx] = useState(null);
 
       // 1. Catat Pinjaman Baru (Mengurangi Kas, Mengurangi Saldo Kegiatan, Masuk Pengeluaran)
       const handleSaveLoan = (e) => {
@@ -511,7 +513,16 @@
             const budgetRef = ref(db, 'budgetItems');
             onValue(budgetRef, (snapshot) => {
               const data = snapshot.val();
-              if (data) setBudgetItems(data);
+              if (data) {
+                // Standarisasi otomatis nama kategori dari cloud database
+                const fixedBudget = data.map(item => {
+                  if (item.name && item.name.toLowerCase().includes('pinjaman') && item.name.toLowerCase().includes('terduga')) {
+                    return { ...item, name: 'Pinjaman dan Dana Tak terduga' };
+                  }
+                  return item;
+                });
+                setBudgetItems(fixedBudget);
+              }
             });
 
             const auditRef = ref(db, 'auditLogs');
@@ -640,9 +651,7 @@
       }, [currentUser]);
 
       const availableActivities = useMemo(() => {
-        const setAct = new Set();
-        
-        // Daftar default yang sudah distandarisasi huruf kapital/kecilnya
+        // Daftar default standar dengan penulisan yang diinginkan
         const defaultActs = [
           'Pendapatan Asli Desa (PAD)',
           'Alokasi Dana Desa (ADD)',
@@ -651,25 +660,29 @@
           'Operasional POSYANDU',
           'Pembangunan Infrastruktur Desa',
           'Pemberdayaan Masyarakat',
-          'Pinjaman dan Dana Tak Terduga',
+          'Pinjaman dan Dana Tak terduga', // <-- Standar baku
           'Pajak PPB dan Iuran RK'
         ];
         
-        defaultActs.forEach(act => setAct.add(act));
-        
-        // Map untuk menampung bentuk unik berdasarkan huruf kecil agar tidak duplikat
         const uniqueMap = new Map();
+        
+        // Masukkan defaultActs ke map dengan key lowercase untuk mencegah duplikat
         defaultActs.forEach(act => {
           uniqueMap.set(act.toLowerCase().trim(), act);
         });
 
+        // Memindai transaksi yang sudah ada di database
         transactions.forEach(t => {
           let rawAct = t.activity && t.activity !== '-' ? t.activity : (t.category || '');
           if (rawAct && rawAct.trim() !== '') {
-            const cleanAct = rawAct.trim();
-            const lowerKey = cleanAct.toLowerCase();
+            let cleanAct = rawAct.trim();
             
-            // Jika belum ada dalam bentuk case-insensitive, masukkan
+            // PEMBERSIHAN OTOMATIS: Jika ada variasi pinjaman & tak terduga, seragamkan!
+            if (cleanAct.toLowerCase().includes('pinjaman') && cleanAct.toLowerCase().includes('terduga')) {
+              cleanAct = 'Pinjaman dan Dana Tak terduga';
+            }
+
+            const lowerKey = cleanAct.toLowerCase();
             if (!uniqueMap.has(lowerKey)) {
               uniqueMap.set(lowerKey, cleanAct);
             }
@@ -785,22 +798,22 @@
       const categoryBreakdown = useMemo(() => {
         const map = new Map();
         transactions.forEach(t => {
-          const cat = t.category || 'Umum';
+          const rawCat = t.category || 'Umum';
+          const cleanCatName = rawCat.trim();
+          const mapKey = cleanCatName.toLowerCase(); // Menyamakan semua jadi huruf kecil agar tidak terpecah
+
+          if (!map.has(mapKey)) {
+            map.set(mapKey, { name: cleanCatName, totalIn: 0, totalOut: 0 });
+          }
+          const item = map.get(mapKey);
           const amt = Number(t.amount || 0);
           const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
 
-          if (!map.has(cat)) {
-            map.set(cat, { totalIn: 0, totalOut: 0 });
-          }
-          const item = map.get(cat);
           if (isInc) item.totalIn += amt;
           else item.totalOut += amt;
         });
 
-        return Array.from(map.entries()).map(([name, stat]) => ({
-          name,
-          ...stat
-        })).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
+        return Array.from(map.values()).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
       }, [transactions]);
 
       const handlePrintReport = () => {
@@ -1407,10 +1420,13 @@
           showToast('⚠️ Akses Ditolak! Anda tidak memiliki izin untuk menghapus transaksi.');
           return;
         }
+        // Buka modal konfirmasi kustom
+        setDeleteTargetTrx(t);
+      };
 
-        if (!confirm(`Apakah Anda yakin ingin menghapus transaksi ${t.id || t.idKey} senilai ${formatIDR(t.amount)} ini?`)) {
-          return;
-        }
+      const executeDeleteTransaction = () => {
+        if (!deleteTargetTrx) return;
+        const t = deleteTargetTrx;
 
         const { db, ref, set, push } = window.FirebaseDB;
         
@@ -1439,6 +1455,7 @@
           module: t.type
         });
 
+        setDeleteTargetTrx(null);
         showToast('🗑️ Transaksi berhasil dihapus dari Cloud!');
       };
 
@@ -3672,6 +3689,40 @@
           )}
 
           {/* MODAL MASTER DESA */}
+          
+          {/* MODAL KONFIRMASI HAPUS TRANSAKSI */}
+          {deleteTargetTrx && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-4">
+              <div className="bg-slate-950/90 rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-rose-500/40 space-y-4 text-slate-100">
+                <div className="w-12 h-12 rounded-2xl bg-rose-950/60 border border-rose-500/40 flex items-center justify-center text-rose-400 mx-auto">
+                  <i data-lucide="alert-triangle" className="w-6 h-6"></i>
+                </div>
+                <div className="text-center space-y-1">
+                  <h3 className="font-bold text-base text-slate-100">Konfirmasi Hapus Transaksi</h3>
+                  <p className="text-xs text-slate-400">
+                    Apakah Anda yakin ingin menghapus transaksi <b className="text-white">{deleteTargetTrx.category}</b> senilai <b className="text-rose-400">{formatIDR(deleteTargetTrx.amount)}</b> ini?
+                  </p>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <button 
+                    type="button" 
+                    onClick={() => setDeleteTargetTrx(null)} 
+                    className="flex-1 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] transition text-xs"
+                  >
+                    Batal
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={executeDeleteTransaction} 
+                    className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold shadow-lg shadow-rose-950 border border-rose-400/45 transition text-xs"
+                  >
+                    Ya, Hapus
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {isModalMasterOpen && (
             <div className="fixed inset-0 z-50 bg-transparent flex items-center justify-center p-4 pointer-events-auto">
               <div className="bg-slate-950/90 rounded-3xl max-w-lg w-full p-6 shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/20 space-y-5 text-slate-100 backdrop-blur-none">
