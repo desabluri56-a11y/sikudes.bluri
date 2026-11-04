@@ -161,6 +161,76 @@
       }).format(val);
     };
 
+    // Menghasilkan tanggal lokal (bukan UTC) agar tanggal input tidak bergeser sehari.
+    const getLocalDateString = () => {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+
+    const getTransactionDirection = (type) => {
+      const value = String(type || '').trim().toLowerCase();
+      if (value === 'in' || value.includes('pendapatan') || value.includes('penerimaan') || value.includes('masuk')) return 'in';
+      if (value === 'out' || value.includes('pengeluaran') || value.includes('belanja') || value.includes('keluar')) return 'out';
+      return 'unknown';
+    };
+
+    // Normalisasi kategori agar variasi kapitalisasi dan spasi tidak memecah rekap.
+    // Alias dibuat terbatas pada singkatan APBDes yang jelas; nama kategori lain tetap terpisah.
+    const normalizeCategoryKey = (value) => {
+      const raw = String(value || '').normalize('NFC').trim().toLowerCase().replace(/\s+/g, ' ');
+      const aliases = {
+        'dd': 'dana desa (dd)',
+        'dana desa': 'dana desa (dd)',
+        'pad': 'pendapatan asli desa (pad)',
+        'pendapatan asli desa': 'pendapatan asli desa (pad)',
+        'add': 'alokasi dana desa (add)',
+        'alokasi dana desa': 'alokasi dana desa (add)',
+        'bhp': 'bagi hasil pajak (bhp)',
+        'bagi hasil pajak daerah': 'bagi hasil pajak (bhp)',
+        'pbb dan iuran rk': 'pajak ppb dan iuran rk',
+        'pajak pbb dan iuran rk': 'pajak ppb dan iuran rk'
+      };
+      return aliases[raw] || raw;
+    };
+
+    const getSafeAmount = (value) => {
+      if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : 0;
+      if (value === null || value === undefined || value === '') return 0;
+      let raw = String(value).trim();
+      if (!raw) return 0;
+      const isNegative = /^\s*-/.test(raw) || /^\(.*\)$/.test(raw);
+      raw = raw.replace(/[()]/g, '').replace(/[^0-9,.]/g, '');
+      if (!raw) return 0;
+      // Format Indonesia: titik pemisah ribuan, koma desimal. Format angka biasa tetap diterima.
+      if (raw.includes(',')) {
+        raw = raw.replace(/\./g, '').replace(',', '.');
+      } else if ((raw.match(/\./g) || []).length > 1 || /\.\d{3}$/.test(raw)) {
+        raw = raw.replace(/\./g, '');
+      }
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) return 0;
+      return Math.round(isNegative ? -Math.abs(parsed) : parsed);
+    };
+
+    const getTransactionYear = (value) => {
+      const date = String(value || '').trim();
+      const isoMatch = date.match(/^(\d{4})-\d{1,2}-\d{1,2}$/);
+      const slashMatch = date.match(/^\d{1,2}\/\d{1,2}\/(\d{4})$/);
+      return isoMatch ? isoMatch[1] : (slashMatch ? slashMatch[1] : '');
+    };
+
+    const isReportEligibleTransaction = (t, year) => {
+      if (getTransactionYear(t.date) !== String(year)) return false;
+      const status = String(t.status || '').trim().toLowerCase();
+      // Status kosong tetap diterima untuk kompatibilitas data lama.
+      // Status yang terisi harus merupakan status persetujuan yang dikenal.
+      if (status && !['disetujui', 'approved', 'approve', 'setuju', 'sudah disetujui'].includes(status)) return false;
+      return getTransactionDirection(t.type) !== 'unknown' && getSafeAmount(t.amount) > 0;
+    };
+
     const parseDateToNumber = (dateStr) => {
       if (!dateStr) return 0;
       if (dateStr.includes('-')) {
@@ -208,6 +278,7 @@
         amount: '',
         activity: '',
         description: '',
+        date: getLocalDateString(),
         dueDate: ''
       });
       const [loanPage, setLoanPage] = useState(1);
@@ -220,7 +291,7 @@
         creditor: '',
         amount: '',
         description: '',
-        date: new Date().toISOString().split('T')[0],
+        date: getLocalDateString(),
         dueDate: '-',
         status: 'Belum'
       });
@@ -278,12 +349,14 @@
       const [selectedYear, setSelectedYear] = useState('2026');
       const [notificationMsg, setNotificationMsg] = useState(null);
 
-      // Fungsi untuk menghitung total realisasi dana dari cloud transactions berdasarkan kategori APBDes
-      const getCategoryRealization = (categoryName) => {
-        if (!transactions || transactions.length === 0) return 0;
-        return transactions
-          .filter(t => (t.category || '').trim().toLowerCase() === categoryName.trim().toLowerCase())
-          .reduce((sum, curr) => sum + Number(curr.amount || 0), 0);
+      // Realisasi anggaran memakai sumber laporan yang sama: tahun terpilih,
+      // status transaksi valid, kategori cocok, dan arah transaksi sesuai jenis anggaran.
+      const getCategoryRealization = (categoryName, budgetCategory) => {
+        const expectedDirection = budgetCategory === 'Pendapatan' ? 'in' : 'out';
+        return reportTransactions
+          .filter(t => normalizeCategoryKey(t.category) === normalizeCategoryKey(categoryName))
+          .filter(t => getTransactionDirection(t.type) === expectedDirection)
+          .reduce((sum, t) => sum + getSafeAmount(t.amount), 0);
       };
 
       const [reportType, setReportType] = useState('bku');
@@ -314,6 +387,7 @@
         activity: '',
         customActivity: '',
         description: '',
+        date: getLocalDateString(),
         accountId: '101',
         amount: '',
         recipient: '',
@@ -349,7 +423,7 @@
 
         const { db, ref, set, push, update } = window.FirebaseDB;
         const loanId = `PINJAMAN-${Date.now().toString().slice(-4)}`;
-        const currentDate = new Date().toISOString().split('T')[0];
+        const currentDate = loanForm.date || getLocalDateString();
 
         // Buat objek pinjaman baru
         const newLoan = {
@@ -395,7 +469,7 @@
           set(ref(db, 'accounts'), updatedAccs);
 
           setIsModalLoanOpen(false);
-          setLoanForm({ borrower: '', amount: '', activity: '', description: '', dueDate: '' });
+          setLoanForm({ borrower: '', amount: '', activity: '', description: '', date: getLocalDateString(), dueDate: '' });
           showToast('✅ Pinjaman berhasil dicatat, saldo kas & kegiatan dikurangi.');
         });
       };
@@ -710,23 +784,22 @@
         return totalIn - totalOut;
       };
 
+      // Satu sumber data untuk seluruh laporan: tahun terpilih, status valid, dan jenis transaksi dikenal.
+      const reportTransactions = useMemo(() => {
+        return transactions.filter(t => isReportEligibleTransaction(t, selectedYear));
+      }, [transactions, selectedYear]);
+
       const financialSummary = useMemo(() => {
         const totalBudgetRevenue = budgetItems.filter(i => i.category === 'Pendapatan').reduce((acc, curr) => acc + (curr.budget || 0), 0);
         const totalBudgetExpenditure = budgetItems.filter(i => i.category === 'Belanja').reduce((acc, curr) => acc + (curr.budget || 0), 0);
         
-        const approvedRevenue = transactions
-          .filter(t => {
-            const typeStr = (t.type || '').toLowerCase();
-            return typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
-          })
-          .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+        const approvedRevenue = reportTransactions
+          .filter(t => getTransactionDirection(t.type) === 'in')
+          .reduce((acc, curr) => acc + getSafeAmount(curr.amount), 0);
 
-        const approvedExpenditure = transactions
-          .filter(t => {
-            const typeStr = (t.type || '').toLowerCase();
-            return typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
-          })
-          .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
+        const approvedExpenditure = reportTransactions
+          .filter(t => getTransactionDirection(t.type) === 'out')
+          .reduce((acc, curr) => acc + getSafeAmount(curr.amount), 0);
         
         // PERUBAHAN DI SINI: Total Kas Aktif menjumlahkan saldo dari seluruh akun (Kas Tunai + Bank Jatim + Bank BRI, dll)
         const totalCashBalance = accounts.reduce((acc, curr) => acc + Number(curr.balance || 0), 0);
@@ -734,7 +807,7 @@
         const absorptionRate = totalBudgetExpenditure > 0 ? ((approvedExpenditure / totalBudgetExpenditure) * 100).toFixed(1) : '0';
 
         return { totalBudgetRevenue, totalBudgetExpenditure, approvedRevenue, approvedExpenditure, totalCashBalance, absorptionRate };
-      }, [budgetItems, transactions, accounts]); // Jangan lupa tambahkan 'accounts' di dependency array useMemo
+      }, [budgetItems, reportTransactions, accounts]); // Ringkasan mengikuti tahun anggaran terpilih
 
       const recentTransactions = useMemo(() => {
         return [...transactions].reverse().slice(0, 5);
@@ -745,7 +818,7 @@
         const revByMonth = new Array(12).fill(0);
         const expByMonth = new Array(12).fill(0);
 
-        transactions.forEach(t => {
+        reportTransactions.forEach(t => {
           if (!t.date) return;
           let monthIndex = -1;
           if (t.date.includes('-')) {
@@ -757,11 +830,10 @@
           }
 
           if (monthIndex >= 0 && monthIndex < 12) {
-            const amt = Number(t.amount || 0);
-            const typeStr = (t.type || '').toLowerCase();
-            const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
-            if (isInc) revByMonth[monthIndex] += amt;
-            else expByMonth[monthIndex] += amt;
+            const amt = getSafeAmount(t.amount);
+            const direction = getTransactionDirection(t.type);
+            if (direction === 'in') revByMonth[monthIndex] += amt;
+            else if (direction === 'out') expByMonth[monthIndex] += amt;
           }
         });
 
@@ -770,14 +842,14 @@
           revenue: revByMonth[idx],
           expense: expByMonth[idx]
         }));
-      }, [transactions]);
+      }, [reportTransactions]);
 
       const activityBreakdown = useMemo(() => {
         const map = new Map();
-        transactions.forEach(t => {
+        reportTransactions.forEach(t => {
           const act = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
-          const amt = Number(t.amount || 0);
-          const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
+          const amt = getSafeAmount(t.amount);
+          const isInc = getTransactionDirection(t.type) === 'in';
 
           if (!map.has(act)) {
             map.set(act, { totalIn: 0, totalOut: 0, count: 0 });
@@ -793,28 +865,26 @@
           ...stat,
           net: stat.totalIn - stat.totalOut
         })).sort((a, b) => b.totalOut - a.totalOut);
-      }, [transactions]);
+      }, [reportTransactions]);
 
       const categoryBreakdown = useMemo(() => {
         const map = new Map();
-        transactions.forEach(t => {
-          const rawCat = t.category || 'Umum';
-          const cleanCatName = rawCat.trim();
-          const mapKey = cleanCatName.toLowerCase(); // Menyamakan semua jadi huruf kecil agar tidak terpecah
-
+        reportTransactions.forEach(t => {
+          const rawCat = String(t.category || 'Umum').trim() || 'Umum';
+          const mapKey = normalizeCategoryKey(rawCat);
+          // Gunakan nama baku dari master anggaran bila tersedia agar label laporan konsisten.
+          const masterCategory = budgetItems.find(item => normalizeCategoryKey(item.name) === mapKey);
           if (!map.has(mapKey)) {
-            map.set(mapKey, { name: cleanCatName, totalIn: 0, totalOut: 0 });
+            map.set(mapKey, { name: masterCategory ? masterCategory.name : rawCat, totalIn: 0, totalOut: 0 });
           }
           const item = map.get(mapKey);
-          const amt = Number(t.amount || 0);
-          const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-
-          if (isInc) item.totalIn += amt;
-          else item.totalOut += amt;
+          const amt = getSafeAmount(t.amount);
+          const direction = getTransactionDirection(t.type);
+          if (direction === 'in') item.totalIn += amt;
+          else if (direction === 'out') item.totalOut += amt;
         });
-
         return Array.from(map.values()).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
-      }, [transactions]);
+      }, [reportTransactions, budgetItems]);
 
       const handlePrintReport = () => {
         const printArea = document.getElementById('printable-report-area');
@@ -865,11 +935,11 @@
         if (reportType === 'bku') {
           dataRows.push(['Tanggal', 'Kegiatan Terkait', 'Uraian / Keterangan', 'Penerimaan (Rp)', 'Pengeluaran (Rp)', 'Saldo (Rp)']);
           let runningBal = 0;
-          const sortedTrx = sortTransactionsChronologically(transactions);
+          const sortedTrx = sortTransactionsChronologically(reportTransactions);
           
           sortedTrx.forEach(t => {
-            const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-            const amt = Number(t.amount || 0);
+            const isInc = getTransactionDirection(t.type) === 'in';
+            const amt = getSafeAmount(t.amount);
             runningBal += isInc ? amt : -amt;
 
             dataRows.push([
@@ -902,12 +972,12 @@
           dataRows.push(['Tanggal', 'Kategori APBDes', 'Uraian Transaksi', 'Jenis', 'Nominal (Rp)', 'Saldo (Rp)']);
 
           let runningBalCat = 0;
-          const sortedTrx = sortTransactionsChronologically(transactions);
-          const filteredTrx = sortedTrx.filter(t => reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter);
+          const sortedTrx = sortTransactionsChronologically(reportTransactions);
+          const filteredTrx = sortedTrx.filter(t => reportCategoryFilter === 'Semua' || String(t.category || '').trim().toLowerCase() === reportCategoryFilter.trim().toLowerCase());
 
           filteredTrx.forEach(t => {
-            const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-            const amt = Number(t.amount || 0);
+            const isInc = getTransactionDirection(t.type) === 'in';
+            const amt = getSafeAmount(t.amount);
             runningBalCat += isInc ? amt : -amt;
 
             dataRows.push([
@@ -940,7 +1010,7 @@
           dataRows.push(['Tanggal', 'Jenis Kegiatan', 'Kategori APBDes', 'Uraian Transaksi', 'Penerimaan (Rp)', 'Pengeluaran (Rp)', 'Saldo (Rp)']);
 
           let runningBalAct = 0;
-          const sortedTrx = sortTransactionsChronologically(transactions);
+          const sortedTrx = sortTransactionsChronologically(reportTransactions);
           const filteredTrx = sortedTrx.filter(t => {
             const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
             return reportActivityFilter === 'Semua' || actName === reportActivityFilter;
@@ -948,8 +1018,8 @@
 
           filteredTrx.forEach(t => {
             const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
-            const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-            const amt = Number(t.amount || 0);
+            const isInc = getTransactionDirection(t.type) === 'in';
+            const amt = getSafeAmount(t.amount);
             runningBalAct += isInc ? amt : -amt;
 
             dataRows.push([
@@ -1246,7 +1316,7 @@
           set(debtRef, updatedData).then(() => {
             setIsModalDebtOpen(false);
             setEditingDebt(null);
-            setDebtForm({ creditor: '', amount: '', description: '', date: new Date().toISOString().split('T')[0], dueDate: '-', status: 'Belum' });
+            setDebtForm({ creditor: '', amount: '', description: '', date: getLocalDateString(), dueDate: '-', status: 'Belum' });
             showToast('✅ Data hutang desa berhasil diperbarui!');
           });
         } else {
@@ -1256,7 +1326,7 @@
             creditor: debtForm.creditor,
             amount: amountNum,
             description: debtForm.description || 'Pencatatan hutang desa',
-            date: debtForm.date || new Date().toISOString().split('T')[0],
+            date: debtForm.date || getLocalDateString(),
             dueDate: debtForm.dueDate || '-',
             status: debtForm.status || 'Belum'
           };
@@ -1264,7 +1334,7 @@
           const debtRef = push(ref(db, 'villageDebts'));
           set(debtRef, newDebt).then(() => {
             setIsModalDebtOpen(false);
-            setDebtForm({ creditor: '', amount: '', description: '', date: new Date().toISOString().split('T')[0], dueDate: '-', status: 'Belum' });
+            setDebtForm({ creditor: '', amount: '', description: '', date: getLocalDateString(), dueDate: '-', status: 'Belum' });
             showToast('✅ Hutang desa berhasil dicatat (Kas tidak terpengaruh).');
           });
         }
@@ -1342,6 +1412,7 @@
           const updatedTrxData = {
             ...editingTrx,
             type: trxType,
+            date: formData.date || editingTrx.date || getLocalDateString(),
             category: finalCategory,
             activity: finalActivity,
             description: formData.description,
@@ -1364,10 +1435,11 @@
 
           showToast(`✅ Transaksi ${editingTrx.id} berhasil diperbarui!`);
         } else {
-          const newTrxId = `TRX-${selectedYear}-${Date.now().toString().slice(-4)}`;
+          const transactionYear = (formData.date || getLocalDateString()).slice(0, 4);
+          const newTrxId = `TRX-${transactionYear}-${Date.now().toString().slice(-4)}`;
           const newTransaction = {
             id: newTrxId,
-            date: new Date().toISOString().split('T')[0],
+            date: formData.date || getLocalDateString(),
             type: trxType,
             category: finalCategory,
             activity: finalActivity,
@@ -1411,7 +1483,7 @@
         setEditingTrx(null);
         setFormData({ 
           category: '', customCategory: '', activity: '', customActivity: '', 
-          description: '', accountId: '101', amount: '', recipient: '', taxType: 'Tidak Ada', taxPercent: 0 
+          description: '', date: getLocalDateString(), accountId: '101', amount: '', recipient: '', taxType: 'Tidak Ada', taxPercent: 0 
         });
       };
 
@@ -1472,6 +1544,7 @@
           activity: t.activity || '',
           customActivity: '',
           description: t.description,
+          date: t.date || getLocalDateString(),
           accountId: t.accountId || '101',
           amount: t.amount,
           recipient: t.recipient || '',
@@ -2280,7 +2353,7 @@
                         <button
                           onClick={() => {
                             setEditingDebt(null);
-                            setDebtForm({ creditor: '', amount: '', description: '', date: new Date().toISOString().split('T')[0], dueDate: '-', status: 'Belum' });
+                            setDebtForm({ creditor: '', amount: '', description: '', date: getLocalDateString(), dueDate: '-', status: 'Belum' });
                             setIsModalDebtOpen(true);
                           }}
                           className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30 transition"
@@ -2383,10 +2456,10 @@
 
                       <div className="grid grid-cols-2 gap-3">
                         <div>
-                          <label className="font-bold block mb-1 text-slate-300">Tanggal Catat</label>
+                          <label className="font-bold block mb-1 text-slate-300">Tanggal Transaksi Hutang</label>
                           <input 
                             type="date" 
-                            value={debtForm.date}
+                            value={debtForm.date || getLocalDateString()}
                             onChange={(e) => setDebtForm({ ...debtForm, date: e.target.value })}
                             className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-amber-500"
                             required
@@ -2459,7 +2532,7 @@
                     </div>
                     {userPermissions.canEdit && (
                       <button
-                        onClick={() => setIsModalLoanOpen(true)}
+                        onClick={() => { setLoanForm(prev => ({ ...prev, date: getLocalDateString() })); setIsModalLoanOpen(true); }}
                         className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
                       >
                         <i data-lucide="plus" className="w-4 h-4"></i> Catat Pinjaman Baru
@@ -2548,6 +2621,10 @@
                       </div>
 
                       <div>
+                        <label className="font-bold block mb-1 text-slate-300">Tanggal Pinjaman / Pencairan</label>
+                        <input type="date" value={loanForm.date || getLocalDateString()} onChange={(e) => setLoanForm({ ...loanForm, date: e.target.value })} className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" required />
+                      </div>
+                      <div>
                         <label className="font-bold block mb-1 text-slate-300">Pilih Kegiatan Terkait</label>
                         <select
                           value={loanForm.activity}
@@ -2622,7 +2699,7 @@
                       </thead>
                       <tbody className="divide-y divide-white/10">
                         {budgetItems.map(item => {
-                          const realVal = getCategoryRealization(item.name);
+                          const realVal = getCategoryRealization(item.name, item.category);
                           const pct = item.budget > 0 ? ((realVal / item.budget) * 100).toFixed(1) : '0';
                           const isPendapatan = item.category === 'Pendapatan';
 
@@ -2670,7 +2747,7 @@
                     </div>
                     {userPermissions.canEdit && (
                       <button
-                        onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setIsModalTrxOpen(true); }}
+                        onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
                         className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
                       >
                         <i data-lucide="plus" className="w-4 h-4"></i> Catat Pendapatan
@@ -2722,7 +2799,7 @@
                       </thead>
                       <tbody className="divide-y divide-white/10">
                         {(() => {
-                          const filteredRevenue = sortTransactionsChronologically(transactions).filter(t => {
+                          const filteredRevenue = sortTransactionsChronologically(reportTransactions).filter(t => {
                             const typeStr = (t.type || '').toLowerCase();
                             const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
                             if (!isInc) return false;
@@ -2779,7 +2856,7 @@
 
                   {/* Navigasi Pagination Penerimaan */}
                   {(() => {
-                    const filteredRevenue = sortTransactionsChronologically(transactions).filter(t => {
+                    const filteredRevenue = sortTransactionsChronologically(reportTransactions).filter(t => {
                       const typeStr = (t.type || '').toLowerCase();
                       const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
                       if (!isInc) return false;
@@ -2826,7 +2903,7 @@
                     </div>
                     {userPermissions.canEdit && (
                       <button
-                        onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setIsModalTrxOpen(true); }}
+                        onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
                         className="bg-rose-600/70 hover:bg-rose-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-rose-400/30"
                       >
                         <i data-lucide="plus" className="w-4 h-4"></i> Catat Belanja
@@ -2878,7 +2955,7 @@
                       </thead>
                       <tbody className="divide-y divide-white/10">
                         {(() => {
-                          const filteredExpenditure = sortTransactionsChronologically(transactions).filter(t => {
+                          const filteredExpenditure = sortTransactionsChronologically(reportTransactions).filter(t => {
                             const typeStr = (t.type || '').toLowerCase();
                             const isOut = typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
                             if (!isOut) return false;
@@ -2935,7 +3012,7 @@
 
                   {/* Navigasi Pagination Pengeluaran */}
                   {(() => {
-                    const filteredExpenditure = sortTransactionsChronologically(transactions).filter(t => {
+                    const filteredExpenditure = sortTransactionsChronologically(reportTransactions).filter(t => {
                       const typeStr = (t.type || '').toLowerCase();
                       const isOut = typeStr.includes('pengeluaran') || typeStr.includes('belanja') || typeStr === 'out';
                       if (!isOut) return false;
@@ -3026,7 +3103,7 @@
                       </thead>
                       <tbody className="divide-y divide-white/10">
                         {(() => {
-                          const allSorted = sortTransactionsChronologically(transactions);
+                          const allSorted = sortTransactionsChronologically(reportTransactions);
                           let runningBalance = 0;
                           
                           const mappedTrx = allSorted.map((t) => {
@@ -3083,7 +3160,7 @@
 
                   {/* Navigasi Pagination BKU */}
                   {(() => {
-                    const allSorted = sortTransactionsChronologically(transactions);
+                    const allSorted = sortTransactionsChronologically(reportTransactions);
                     let runningBal = 0;
                     const mappedTrx = allSorted.map((t) => {
                       const typeStr = (t.type || '').toLowerCase();
@@ -3232,7 +3309,7 @@
                           <tbody>
                             {(() => {
                               let runningBal = 0;
-                              const sortedTrx = sortTransactionsChronologically(transactions);
+                              const sortedTrx = sortTransactionsChronologically(reportTransactions);
                               if (sortedTrx.length === 0) {
                                 return (
                                   <tr>
@@ -3241,8 +3318,8 @@
                                 );
                               }
                               return sortedTrx.map((t, idx) => {
-                                const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-                                const amt = Number(t.amount || 0);
+                                const isInc = getTransactionDirection(t.type) === 'in';
+                                const amt = getSafeAmount(t.amount);
                                 runningBal += isInc ? amt : -amt;
                                 return (
                                   <tr key={idx} className="border-b border-slate-200">
@@ -3314,8 +3391,8 @@
                             <tbody>
                               {(() => {
                                 let runningBalCat = 0;
-                                const sortedTrx = sortTransactionsChronologically(transactions);
-                                const filteredTrx = sortedTrx.filter(t => reportCategoryFilter === 'Semua' || t.category === reportCategoryFilter);
+                                const sortedTrx = sortTransactionsChronologically(reportTransactions);
+                                const filteredTrx = sortedTrx.filter(t => reportCategoryFilter === 'Semua' || String(t.category || '').trim().toLowerCase() === reportCategoryFilter.trim().toLowerCase());
 
                                 if (filteredTrx.length === 0) {
                                   return (
@@ -3326,8 +3403,8 @@
                                 }
 
                                 return filteredTrx.map((t, idx) => {
-                                  const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-                                  const amt = Number(t.amount || 0);
+                                  const isInc = getTransactionDirection(t.type) === 'in';
+                                  const amt = getSafeAmount(t.amount);
                                   runningBalCat += isInc ? amt : -amt;
 
                                   return (
@@ -3403,7 +3480,7 @@
                             <tbody>
                               {(() => {
                                 let runningBal = 0;
-                                const sortedTrx = sortTransactionsChronologically(transactions);
+                                const sortedTrx = sortTransactionsChronologically(reportTransactions);
                                 const filteredTrx = sortedTrx.filter(t => {
                                   const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
                                   return reportActivityFilter === 'Semua' || actName === reportActivityFilter;
@@ -3419,8 +3496,8 @@
 
                                 return filteredTrx.map((t, idx) => {
                                   const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
-                                  const isInc = (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in';
-                                  const amt = Number(t.amount || 0);
+                                  const isInc = getTransactionDirection(t.type) === 'in';
+                                  const amt = getSafeAmount(t.amount);
                                   runningBal += isInc ? amt : -amt;
 
                                   return (
@@ -3573,6 +3650,10 @@
                 </div>
 
                 <form onSubmit={handleSaveTransaction} className="space-y-4 text-xs">
+                  <div>
+                    <label className="font-bold block mb-1 text-slate-300">Tanggal Transaksi</label>
+                    <input type="date" value={formData.date || getLocalDateString()} onChange={(e) => setFormData({ ...formData, date: e.target.value })} className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500" required />
+                  </div>
                   <div>
                     <label className="font-bold block mb-1 text-slate-300">Kategori APBDes</label>
                     <select 
