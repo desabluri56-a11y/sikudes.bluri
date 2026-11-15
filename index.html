@@ -78,6 +78,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
     import { getDatabase, ref, set, push, onValue, update, get, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyBnEFrxm29iURSkKGwEU-ba0pR3Ov7VwPM",
@@ -92,8 +93,10 @@
 
     const app = initializeApp(firebaseConfig);
     const db = getDatabase(app);
+    const storage = getStorage(app);
 
-    window.FirebaseDB = { db, ref, set, push, onValue, update, get, runTransaction };
+    // API Storage ditambahkan tanpa mengubah API Realtime Database yang sudah digunakan.
+    window.FirebaseDB = { db, ref, set, push, onValue, update, get, runTransaction, storage, storageRef, uploadBytes, getDownloadURL };
   </script>
 
   <script type="text/babel">
@@ -386,6 +389,7 @@
       const [isModalTrxOpen, setIsModalTrxOpen] = useState(false);
       const [trxType, setTrxType] = useState('Pendapatan');
       const [editingTrx, setEditingTrx] = useState(null);
+      const [attachmentFiles, setAttachmentFiles] = useState([]);
       const [formData, setFormData] = useState({
         category: '',
         customCategory: '',
@@ -950,11 +954,30 @@
         
         // PERUBAHAN DI SINI: Total Kas Aktif menjumlahkan saldo dari seluruh akun (Kas Tunai + Bank Jatim + Bank BRI, dll)
         const totalCashBalance = accounts.reduce((acc, curr) => acc + Number(curr.balance || 0), 0);
-        
+        const cashOnHand = accounts.filter(a => String(a.type || '').toLowerCase().includes('tunai'))
+          .reduce((acc, curr) => acc + Number(curr.balance || 0), 0);
+        const bankBalance = accounts.filter(a => String(a.type || '').toLowerCase().includes('bank'))
+          .reduce((acc, curr) => acc + Number(curr.balance || 0), 0);
+        const remainingBudget = totalBudgetExpenditure - approvedExpenditure;
         const absorptionRate = totalBudgetExpenditure > 0 ? ((approvedExpenditure / totalBudgetExpenditure) * 100).toFixed(1) : '0';
 
-        return { totalBudgetRevenue, totalBudgetExpenditure, approvedRevenue, approvedExpenditure, totalCashBalance, absorptionRate };
+        return { totalBudgetRevenue, totalBudgetExpenditure, approvedRevenue, approvedExpenditure, totalCashBalance, cashOnHand, bankBalance, remainingBudget, absorptionRate };
       }, [budgetItems, reportTransactions, accounts]); // Ringkasan mengikuti tahun anggaran terpilih
+
+      // Kontrol pagu kategori belanja: perhitungan menggunakan transaksi valid tahun terpilih.
+      // Model pagu saat ini belum menyimpan pagu terpisah per nama kegiatan.
+      const expenditureBudgetChecks = useMemo(() => {
+        return budgetItems.filter(item => item.category === 'Belanja').map(item => {
+          const realized = reportTransactions
+            .filter(t => getTransactionDirection(t.type) === 'out')
+            .filter(t => normalizeCategoryKey(t.category) === normalizeCategoryKey(item.name))
+            .reduce((sum, t) => sum + getSafeAmount(t.amount), 0);
+          const budget = Number(item.budget || 0);
+          const remaining = budget - realized;
+          const percent = budget > 0 ? (realized / budget) * 100 : 0;
+          return { ...item, realized, remaining, percent, status: budget <= 0 ? 'no-budget' : remaining < 0 ? 'over' : percent >= 80 ? 'warning' : 'safe' };
+        });
+      }, [budgetItems, reportTransactions]);
 
       const recentTransactions = useMemo(() => {
         return [...transactions].reverse().slice(0, 5);
@@ -1048,7 +1071,7 @@
 
         const cleanHtml = '<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Cetak Laporan Keuangan Desa - T.A. ' + selectedYear + '</title><script src="https://cdn.tailwindcss.com"><\/script><style>body { background-color: #ffffff !important; color: #0f172a !important; font-family: sans-serif; padding: 2rem; } table { width: 100%; border-collapse: collapse; margin-top: 1rem; margin-bottom: 1rem; } th, td { border: 1px solid #cbd5e1 !important; padding: 8px 10px !important; font-size: 11px !important; } th { background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: bold; } @media print { @page { size: A4; margin: 1cm; } }</style></head><body>' + 
           printArea.innerHTML + 
-          '<script>window.onload = function() { setTimeout(() => { window.print(); }, 500); };<\/script></body></html>';
+          '<script>window.onload = function() { const imgs = Array.from(document.images); const waits = imgs.map(img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = resolve; img.onerror = resolve; setTimeout(resolve, 7000); })); Promise.all(waits).then(() => setTimeout(() => window.print(), 300)); };<\/script></body></html>';
 
         printWindow.document.write(cleanHtml);
         printWindow.document.close();
@@ -1759,7 +1782,7 @@
         showToast('📊 Berhasil mengunduh laporan hutang desa format Excel (.xlsx)!');
       };
 
-      const handleSaveTransaction = (e) => {
+      const handleSaveTransaction = async (e) => {
         e.preventDefault();
         if (!userPermissions.canEdit) {
           showToast('⚠️ Akses Ditolak! Peran Anda tidak diizinkan mengubah transaksi.');
@@ -1770,7 +1793,7 @@
           return;
         }
 
-        const { db, ref, set, push } = window.FirebaseDB;
+        const { db, ref, set, push, storage, storageRef, uploadBytes, getDownloadURL } = window.FirebaseDB;
         const finalCategory = formData.category === 'Lainnya' ? formData.customCategory.trim() : formData.category;
         if (!finalCategory) {
           showToast('⚠️ Harap isi/pilih Kategori APBDes!');
@@ -1780,6 +1803,59 @@
         const finalActivity = formData.activity === 'Lainnya' ? formData.customActivity.trim() : (formData.activity || '-');
         const grossAmount = Number(formData.amount);
         const selectedAccount = accounts.find(a => a.id === formData.accountId);
+        if (trxType === 'Pengeluaran') {
+          const matchedBudget = budgetItems.find(item => item.category === 'Belanja' && normalizeCategoryKey(item.name) === normalizeCategoryKey(finalCategory));
+          if (matchedBudget) {
+            const currentRealization = reportTransactions
+              .filter(t => getTransactionDirection(t.type) === 'out')
+              .filter(t => normalizeCategoryKey(t.category) === normalizeCategoryKey(finalCategory))
+              .filter(t => !editingTrx || t.idKey !== editingTrx.idKey)
+              .reduce((sum, t) => sum + getSafeAmount(t.amount), 0);
+            const nextTotal = currentRealization + grossAmount;
+            const limit = Number(matchedBudget.budget || 0);
+            if (limit > 0 && nextTotal > limit) {
+              const proceed = window.confirm(`PERINGATAN PAGU ANGGARAN\n\nKategori: ${finalCategory}\nPagu: ${formatIDR(limit)}\nRealisasi setelah transaksi: ${formatIDR(nextTotal)}\nKelebihan: ${formatIDR(nextTotal - limit)}\n\nTransaksi tetap dapat disimpan, tetapi akan tercatat melampaui pagu. Lanjutkan?`);
+              if (!proceed) return;
+            } else if (limit > 0 && nextTotal >= limit * 0.8) {
+              const proceed = window.confirm(`PERINGATAN: Realisasi kategori ${finalCategory} akan mencapai ${(nextTotal / limit * 100).toFixed(1)}% dari pagu (${formatIDR(limit)}).\n\nLanjutkan menyimpan transaksi?`);
+              if (!proceed) return;
+            } else if (limit <= 0) {
+              const proceed = window.confirm(`Kategori ${finalCategory} belum memiliki pagu belanja pada Data Penganggaran. Transaksi tetap dapat dicatat, tetapi perlu pemeriksaan pagu. Lanjutkan?`);
+              if (!proceed) return;
+            }
+          }
+        }
+
+        const existingAttachments = editingTrx && Array.isArray(editingTrx.attachments) ? editingTrx.attachments : [];
+        if (attachmentFiles.length > 5) {
+          showToast('⚠️ Maksimal 5 dokumen untuk satu transaksi.');
+          return;
+        }
+        if (attachmentFiles.some(file => file.size > 10 * 1024 * 1024)) {
+          showToast('⚠️ Ukuran setiap dokumen maksimal 10 MB.');
+          return;
+        }
+        let uploadedAttachments = [...existingAttachments];
+        if (attachmentFiles.length) {
+          if (!storage || !storageRef || !uploadBytes || !getDownloadURL) {
+            showToast('❌ Firebase Storage belum tersedia. Dokumen belum diunggah; transaksi tidak disimpan.');
+            return;
+          }
+          try {
+            for (const file of attachmentFiles) {
+              const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+              const objectPath = `transactionAttachments/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}`;
+              const fileRef = storageRef(storage, objectPath);
+              const uploaded = await uploadBytes(fileRef, file, { contentType: file.type || 'application/octet-stream' });
+              const downloadURL = await getDownloadURL(uploaded.ref);
+              uploadedAttachments.push({ name: file.name, url: downloadURL, path: objectPath, size: file.size, type: file.type || '', uploadedAt: new Date().toISOString(), uploadedBy: currentUser.name });
+            }
+          } catch (uploadError) {
+            console.error('Upload bukti transaksi gagal:', uploadError);
+            showToast('❌ Upload bukti transaksi gagal. Periksa Firebase Storage dan aturannya. Transaksi belum disimpan.');
+            return;
+          }
+        }
 
         if (editingTrx) {
           const updatedTrxData = {
@@ -1792,7 +1868,8 @@
             accountId: formData.accountId,
             accountName: selectedAccount ? selectedAccount.name : 'Rekening Kas',
             amount: grossAmount,
-            netAmount: grossAmount
+            netAmount: grossAmount,
+            attachments: uploadedAttachments
           };
 
           const trxRef = ref(db, `transactions/${editingTrx.idKey}`);
@@ -1822,6 +1899,7 @@
             amount: grossAmount,
             tax: 0,
             netAmount: grossAmount,
+            attachments: uploadedAttachments,
             recipient: formData.recipient || 'Pihak Terkait',
             status: 'Disetujui',
             approvedBy: currentUser.name,
@@ -1854,6 +1932,7 @@
 
         setIsModalTrxOpen(false);
         setEditingTrx(null);
+        setAttachmentFiles([]);
         setFormData({ 
           category: '', customCategory: '', activity: '', customActivity: '', 
           description: '', date: getLocalDateString(), accountId: '101', amount: '', recipient: '', taxType: 'Tidak Ada', taxPercent: 0 
@@ -1910,6 +1989,7 @@
           return;
         }
         setEditingTrx(t);
+        setAttachmentFiles([]);
         setTrxType(t.type);
         setFormData({
           category: t.category,
@@ -3199,7 +3279,7 @@
                     </div>
                     {userPermissions.canEdit && (
                       <button
-                        onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
+                        onClick={() => { setEditingTrx(null); setAttachmentFiles([]); setTrxType('Pendapatan'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
                         className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
                       >
                         <i data-lucide="plus" className="w-4 h-4"></i> Catat Pendapatan
@@ -3355,7 +3435,7 @@
                     </div>
                     {userPermissions.canEdit && (
                       <button
-                        onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
+                        onClick={() => { setEditingTrx(null); setAttachmentFiles([]); setTrxType('Pengeluaran'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
                         className="bg-rose-600/70 hover:bg-rose-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-rose-400/30"
                       >
                         <i data-lucide="plus" className="w-4 h-4"></i> Catat Belanja
@@ -4090,6 +4170,47 @@
                       </div>
                     )}
 
+                    {(() => {
+                      let attachmentTransactions = reportType === 'income-description'
+                        ? descriptionRevenueTransactions
+                        : sortTransactionsChronologically(reportTransactions);
+                      if (reportType === 'category' && reportCategoryFilter !== 'Semua') {
+                        attachmentTransactions = attachmentTransactions.filter(t => String(t.category || '').trim().toLowerCase() === reportCategoryFilter.trim().toLowerCase());
+                      }
+                      if (reportType === 'activity' && reportActivityFilter !== 'Semua') {
+                        attachmentTransactions = attachmentTransactions.filter(t => {
+                          const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+                          return actName === reportActivityFilter;
+                        });
+                      }
+                      const rows = attachmentTransactions.filter(t => Array.isArray(t.attachments) && t.attachments.length > 0);
+                      if (!rows.length) return null;
+                      return (
+                        <section className="mt-8 space-y-4">
+                          <h5 className="text-sm font-black uppercase text-slate-900 border-b-2 border-slate-800 pb-2">Lampiran Bukti Transaksi Digital</h5>
+                          <p className="text-[10px] text-slate-600">Bukti yang tercantum di bawah ini terhubung dengan transaksi terkait. Gambar ditampilkan pada lampiran cetak; dokumen PDF disediakan sebagai tautan cloud yang dapat dibuka dari laporan digital.</p>
+                          {rows.map((t, idx) => (
+                            <div key={t.idKey || t.id || idx} className="border border-slate-300 rounded-lg p-3 space-y-2 page-break-inside-avoid">
+                              <div className="text-xs font-bold text-slate-900">{idx + 1}. {t.date || '-'} · {t.description || 'Tanpa keterangan'}</div>
+                              <div className="text-[10px] text-slate-600">{t.category || '-'} · {t.activity || '-'} · {formatIDR(getSafeAmount(t.amount))}</div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {t.attachments.map((file, fileIndex) => {
+                                  const isImage = String(file.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(file.name || '');
+                                  return (
+                                    <div key={`${file.path || file.url}-${fileIndex}`} className="border border-slate-200 rounded p-2 space-y-1">
+                                      {isImage && file.url ? <a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name || 'Bukti transaksi'} style={{ maxWidth: '100%', maxHeight: '360px', objectFit: 'contain', display: 'block', margin: '0 auto' }} /></a> : null}
+                                      <div className="text-[10px] font-semibold break-all">{file.name || `Dokumen ${fileIndex + 1}`}</div>
+                                      {file.url ? <a href={file.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-blue-700 underline break-all">{isImage ? 'Buka gambar asli' : 'Buka / unduh dokumen PDF'}</a> : <span className="text-[10px] text-rose-700">Tautan dokumen tidak tersedia</span>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </section>
+                      );
+                    })()}
+
                     <div className="grid grid-cols-2 pt-10 text-xs text-center font-medium page-break-inside-avoid">
                       <div className="space-y-16">
                         <p>Mengetahui,<br /><b>Kepala Desa {villageProfile.name}</b></p>
@@ -4298,6 +4419,19 @@
                       className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500"
                       required
                     />
+                  </div>
+
+                  <div className="rounded-xl border border-dashed border-sky-400/40 bg-sky-950/20 p-3 space-y-2">
+                    <div className="font-bold text-slate-200">Arsip Bukti Transaksi Digital</div>
+                    <p className="text-[10px] text-slate-400">Lampirkan kuitansi, nota, bukti transfer, foto, atau SPJ (PDF/JPG/PNG). Maksimal 5 file, masing-masing 10 MB.</p>
+                    <input type="file" multiple accept="image/*,.pdf" onChange={(e) => setAttachmentFiles(Array.from(e.target.files || []))} className="block w-full text-[10px] text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-sky-600 file:px-3 file:py-2 file:text-white" />
+                    {attachmentFiles.length > 0 && <div className="text-[10px] text-sky-200">File baru dipilih: {attachmentFiles.map(f => f.name).join(', ')}</div>}
+                    {editingTrx && Array.isArray(editingTrx.attachments) && editingTrx.attachments.length > 0 && (
+                      <div className="space-y-1 pt-1">
+                        <div className="text-[10px] font-bold text-emerald-300">Bukti yang sudah tersimpan:</div>
+                        {editingTrx.attachments.map((file, index) => <a key={`${file.path || file.url}-${index}`} href={file.url} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-sky-300 underline break-all">{file.name || `Dokumen ${index + 1}`} · Buka dokumen</a>)}
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
