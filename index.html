@@ -365,6 +365,8 @@
       const [reportType, setReportType] = useState('bku');
       const [reportCategoryFilter, setReportCategoryFilter] = useState('Semua');
       const [reportActivityFilter, setReportActivityFilter] = useState('Semua');
+      // Filter tambahan khusus laporan pendapatan berdasarkan isi keterangan transaksi.
+      const [reportDescriptionFilter, setReportDescriptionFilter] = useState('');
       // State Filter untuk Menu Penerimaan & Pengeluaran
       const [revenueCategoryFilter, setRevenueCategoryFilter] = useState('Semua');
       const [revenueActivityFilter, setRevenueActivityFilter] = useState('Semua');
@@ -885,6 +887,55 @@
         return transactions.filter(t => isReportEligibleTransaction(t, selectedYear));
       }, [transactions, selectedYear]);
 
+      // Laporan keterangan hanya mengambil transaksi pendapatan yang valid pada tahun terpilih.
+      // Pencarian tidak peka huruf besar/kecil dan mencocokkan teks di bagian mana pun dari keterangan.
+      const descriptionRevenueTransactions = useMemo(() => {
+        const keyword = String(reportDescriptionFilter || '').trim().toLocaleLowerCase('id-ID');
+        return sortTransactionsChronologically(reportTransactions.filter(t =>
+          getTransactionDirection(t.type) === 'in' &&
+          (!keyword || String(t.description || '').toLocaleLowerCase('id-ID').includes(keyword))
+        ));
+      }, [reportTransactions, reportDescriptionFilter]);
+
+      const descriptionRevenueTotal = useMemo(() =>
+        descriptionRevenueTransactions.reduce((sum, t) => sum + getSafeAmount(t.amount), 0),
+      [descriptionRevenueTransactions]);
+
+      // Rekap otomatis berdasarkan keterangan persis dan bulan transaksi.
+      const descriptionRevenueBySource = useMemo(() => {
+        const groups = new Map();
+        descriptionRevenueTransactions.forEach(t => {
+          const label = String(t.description || '').trim() || '(Tanpa Keterangan)';
+          const key = label.toLocaleLowerCase('id-ID');
+          if (!groups.has(key)) groups.set(key, { label, count: 0, total: 0 });
+          const item = groups.get(key);
+          item.count += 1;
+          item.total += getSafeAmount(t.amount);
+        });
+        return Array.from(groups.values()).sort((a, b) => b.total - a.total);
+      }, [descriptionRevenueTransactions]);
+
+      const descriptionRevenueByMonth = useMemo(() => {
+        const groups = new Map();
+        const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+        descriptionRevenueTransactions.forEach(t => {
+          const raw = String(t.date || '');
+          let year = '', month = '';
+          let match = raw.match(/^(\d{4})-(\d{1,2})/);
+          if (match) { year = match[1]; month = Number(match[2]); }
+          else {
+            match = raw.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/);
+            if (match) { month = Number(match[2]); year = match[3]; }
+          }
+          const key = year && month >= 1 && month <= 12 ? `${year}-${String(month).padStart(2, '0')}` : 'Tanggal tidak dikenali';
+          if (!groups.has(key)) groups.set(key, { key, monthLabel: key === 'Tanggal tidak dikenali' ? key : `${monthNames[month - 1]} ${year}`, count: 0, total: 0 });
+          const item = groups.get(key);
+          item.count += 1;
+          item.total += getSafeAmount(t.amount);
+        });
+        return Array.from(groups.values()).sort((a, b) => a.key.localeCompare(b.key));
+      }, [descriptionRevenueTransactions]);
+
       const financialSummary = useMemo(() => {
         const totalBudgetRevenue = budgetItems.filter(i => i.category === 'Pendapatan').reduce((acc, curr) => acc + (curr.budget || 0), 0);
         const totalBudgetExpenditure = budgetItems.filter(i => i.category === 'Belanja').reduce((acc, curr) => acc + (curr.budget || 0), 0);
@@ -1023,6 +1074,7 @@
         if (reportType === 'bku') reportTitle = 'LAPORAN BUKU KAS UMUM (BKU)';
         else if (reportType === 'category') reportTitle = 'LAPORAN REKAPITULASI & DETAIL URAIAN PER KATEGORI APBDES';
         else if (reportType === 'activity') reportTitle = 'LAPORAN REKAPITULASI & DETAIL URAIAN PER JENIS KEGIATAN DESA';
+        else if (reportType === 'income-description') reportTitle = 'LAPORAN PENDAPATAN BERDASARKAN KETERANGAN';
 
         dataRows.push([reportTitle]);
         dataRows.push([`Tahun Anggaran ${selectedYear}`]);
@@ -1128,6 +1180,30 @@
               runningBalAct
             ]);
           });
+        } else if (reportType === 'income-description') {
+          dataRows.push(['Kata Kunci Keterangan', reportDescriptionFilter.trim() || 'Semua Keterangan']);
+          dataRows.push([]);
+          dataRows.push(['REKAP OTOMATIS PER SUMBER / KETERANGAN', 'Jumlah Transaksi', 'Total Pendapatan (Rp)']);
+          descriptionRevenueBySource.forEach(item => dataRows.push([item.label, item.count, item.total]));
+          dataRows.push(['TOTAL', descriptionRevenueTransactions.length, descriptionRevenueTotal]);
+          dataRows.push([]);
+          dataRows.push(['REKAP PENDAPATAN PER BULAN', 'Jumlah Transaksi', 'Total Pendapatan (Rp)']);
+          descriptionRevenueByMonth.forEach(item => dataRows.push([item.monthLabel, item.count, item.total]));
+          dataRows.push([]);
+          dataRows.push(['RINCIAN TRANSAKSI']);
+          dataRows.push(['No', 'Tanggal', 'Keterangan / Uraian', 'Kategori APBDes', 'Kegiatan', 'Pendapatan (Rp)']);
+          descriptionRevenueTransactions.forEach((t, idx) => {
+            dataRows.push([
+              idx + 1,
+              t.date || '-',
+              t.description || '-',
+              t.category || '-',
+              t.activity || '-',
+              getSafeAmount(t.amount)
+            ]);
+          });
+          dataRows.push([]);
+          dataRows.push(['', '', '', '', 'TOTAL PENDAPATAN', descriptionRevenueTotal]);
         }
 
         // Tanda Tangan Pejabat Desa
@@ -3634,6 +3710,7 @@
                         <option value="bku">📖 Buku Kas Umum (BKU)</option>
                         <option value="category">📊 Rekap & Detail Uraian per Kategori</option>
                         <option value="activity">🎯 Rekap & Detail Uraian per Kegiatan</option>
+                        <option value="income-description">🔎 Laporan Pendapatan per Keterangan</option>
                       </select>
                     </div>
 
@@ -3668,6 +3745,20 @@
                         </select>
                       </div>
                     )}
+
+                    {reportType === 'income-description' && (
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-300 mb-1.5">Cari Keterangan Pendapatan</label>
+                        <input
+                          type="text"
+                          value={reportDescriptionFilter}
+                          onChange={(e) => setReportDescriptionFilter(e.target.value)}
+                          placeholder="Contoh: JM, Portal, jual beli, Izin..."
+                          className="w-full bg-slate-900/80 border border-white/25 rounded-xl px-3 py-2.5 text-xs text-white font-semibold placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+                        />
+                        <p className="text-[11px] text-slate-400 mt-1">Pencarian berdasarkan isi kolom Keterangan/Uraian. Kosongkan untuk melihat seluruh pendapatan.</p>
+                      </div>
+                    )}
                   </div>
 
                   {/* AREA PRATINJAU CETAK */}
@@ -3681,6 +3772,7 @@
                         {reportType === 'bku' && 'LAPORAN BUKU KAS UMUM (BKU)'}
                         {reportType === 'category' && 'LAPORAN REKAPITULASI & DETAIL URAIAN PER KATEGORI APBDES'}
                         {reportType === 'activity' && 'LAPORAN REKAPITULASI & DETAIL URAIAN PER JENIS KEGIATAN DESA'}
+                        {reportType === 'income-description' && 'LAPORAN PENDAPATAN BERDASARKAN KETERANGAN'}
                       </h4>
                       <p className="text-xs text-slate-600">Tahun Anggaran {selectedYear} (Urut Kronologis: Jan s.d. Des, Tgl 1 s.d. 31)</p>
                     </div>
@@ -3912,6 +4004,87 @@
                                 });
                               })()}
                             </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {reportType === 'income-description' && (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          <div className="border border-slate-300 rounded-lg p-3">
+                            <p className="text-[10px] uppercase font-bold text-slate-500">Total Pendapatan Ditemukan</p>
+                            <p className="text-lg font-black text-emerald-800">{formatIDR(descriptionRevenueTotal)}</p>
+                          </div>
+                          <div className="border border-slate-300 rounded-lg p-3">
+                            <p className="text-[10px] uppercase font-bold text-slate-500">Jumlah Transaksi</p>
+                            <p className="text-lg font-black text-slate-900">{descriptionRevenueTransactions.length} transaksi</p>
+                          </div>
+                          <div className="border border-slate-300 rounded-lg p-3">
+                            <p className="text-[10px] uppercase font-bold text-slate-500">Kata Kunci</p>
+                            <p className="text-sm font-black text-slate-900">{reportDescriptionFilter.trim() || 'Semua Keterangan'}</p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                          <section className="space-y-2">
+                            <h5 className="text-xs font-black uppercase text-slate-900 bg-emerald-100 px-3 py-2 rounded border border-emerald-200">Rekap Otomatis per Sumber / Keterangan</h5>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs border-collapse">
+                                <thead><tr className="bg-slate-100 font-bold"><th className="p-2 border border-slate-300 text-left">Keterangan</th><th className="p-2 border border-slate-300 text-center">Transaksi</th><th className="p-2 border border-slate-300 text-right">Total Pendapatan</th></tr></thead>
+                                <tbody>
+                                  {descriptionRevenueBySource.length === 0 ? <tr><td colSpan={3} className="p-3 text-center border border-slate-300 text-slate-500">Belum ada data.</td></tr> : descriptionRevenueBySource.map((item, idx) => <tr key={idx}><td className="p-2 border border-slate-300 font-semibold">{item.label}</td><td className="p-2 border border-slate-300 text-center">{item.count}</td><td className="p-2 border border-slate-300 text-right font-bold">{formatIDR(item.total)}</td></tr>)}
+                                </tbody>
+                                <tfoot><tr className="bg-slate-100 font-black"><td className="p-2 border border-slate-300">TOTAL</td><td className="p-2 border border-slate-300 text-center">{descriptionRevenueTransactions.length}</td><td className="p-2 border border-slate-300 text-right">{formatIDR(descriptionRevenueTotal)}</td></tr></tfoot>
+                              </table>
+                            </div>
+                          </section>
+                          <section className="space-y-2">
+                            <h5 className="text-xs font-black uppercase text-slate-900 bg-sky-100 px-3 py-2 rounded border border-sky-200">Rekap Pendapatan per Bulan</h5>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs border-collapse">
+                                <thead><tr className="bg-slate-100 font-bold"><th className="p-2 border border-slate-300 text-left">Bulan</th><th className="p-2 border border-slate-300 text-center">Transaksi</th><th className="p-2 border border-slate-300 text-right">Total Pendapatan</th></tr></thead>
+                                <tbody>
+                                  {descriptionRevenueByMonth.length === 0 ? <tr><td colSpan={3} className="p-3 text-center border border-slate-300 text-slate-500">Belum ada data.</td></tr> : descriptionRevenueByMonth.map((item, idx) => <tr key={item.key || idx}><td className="p-2 border border-slate-300 font-semibold">{item.monthLabel}</td><td className="p-2 border border-slate-300 text-center">{item.count}</td><td className="p-2 border border-slate-300 text-right font-bold">{formatIDR(item.total)}</td></tr>)}
+                                </tbody>
+                              </table>
+                            </div>
+                          </section>
+                        </div>
+                        <h5 className="text-xs font-black uppercase text-slate-900 bg-slate-200 px-3 py-1.5 rounded border border-slate-300">
+                          Rincian Penerimaan Berdasarkan Keterangan
+                        </h5>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs border-collapse">
+                            <thead>
+                              <tr className="bg-slate-100 text-slate-900 font-bold">
+                                <th className="p-2.5 border border-slate-300">No</th>
+                                <th className="p-2.5 border border-slate-300">Tanggal</th>
+                                <th className="p-2.5 border border-slate-300">Keterangan / Uraian</th>
+                                <th className="p-2.5 border border-slate-300">Kategori</th>
+                                <th className="p-2.5 border border-slate-300">Kegiatan</th>
+                                <th className="p-2.5 border border-slate-300 text-right">Jumlah (Rp)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {descriptionRevenueTransactions.length === 0 ? (
+                                <tr><td colSpan={6} className="p-4 text-center text-slate-500 italic border border-slate-300">Tidak ditemukan pendapatan dengan keterangan tersebut.</td></tr>
+                              ) : descriptionRevenueTransactions.map((t, idx) => (
+                                <tr key={t.idKey || t.id || idx}>
+                                  <td className="p-2.5 border border-slate-300 text-center">{idx + 1}</td>
+                                  <td className="p-2.5 border border-slate-300">{t.date || '-'}</td>
+                                  <td className="p-2.5 border border-slate-300 font-semibold">{t.description || '-'}</td>
+                                  <td className="p-2.5 border border-slate-300">{t.category || '-'}</td>
+                                  <td className="p-2.5 border border-slate-300">{t.activity || '-'}</td>
+                                  <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{formatIDR(getSafeAmount(t.amount))}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot>
+                              <tr className="bg-slate-100 font-black">
+                                <td colSpan={5} className="p-2.5 border border-slate-300 text-right">TOTAL PENDAPATAN</td>
+                                <td className="p-2.5 border border-slate-300 text-right text-emerald-800">{formatIDR(descriptionRevenueTotal)}</td>
+                              </tr>
+                            </tfoot>
                           </table>
                         </div>
                       </div>
