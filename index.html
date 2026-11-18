@@ -397,7 +397,8 @@
         amount: '',
         recipient: '',
         taxType: 'Tidak Ada',
-        taxPercent: 0
+        taxPercent: 0,
+        photo: ''
       });
       
       const [isModalMasterOpen, setIsModalMasterOpen] = useState(false);
@@ -1046,9 +1047,12 @@
           return;
         }
 
-        const cleanHtml = '<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Cetak Laporan Keuangan Desa - T.A. ' + selectedYear + '</title><script src="https://cdn.tailwindcss.com"><\/script><style>body { background-color: #ffffff !important; color: #0f172a !important; font-family: sans-serif; padding: 2rem; } table { width: 100%; border-collapse: collapse; margin-top: 1rem; margin-bottom: 1rem; } th, td { border: 1px solid #cbd5e1 !important; padding: 8px 10px !important; font-size: 11px !important; } th { background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: bold; } @media print { @page { size: A4; margin: 1cm; } }</style></head><body>' + 
-          printArea.innerHTML + 
-          '<script>window.onload = function() { setTimeout(() => { window.print(); }, 500); };<\/script></body></html>';
+        const escapePrintText = (value) => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
+        const evidenceTransactions = (reportTransactions || []).filter(t => t.photo && String(t.date || '').startsWith(String(selectedYear)));
+        const evidenceHtml = evidenceTransactions.length ? '<section class="evidence-appendix"><h1>LAMPIRAN BUKTI TRANSAKSI</h1><p>Tahun Anggaran ' + escapePrintText(selectedYear) + '</p>' + evidenceTransactions.map((t, i) => '<article class="evidence-item"><h3>' + (i+1) + '. ' + escapePrintText(t.id || 'Transaksi') + '</h3><p><b>Tanggal:</b> ' + escapePrintText(t.date) + ' &nbsp; <b>Jenis:</b> ' + escapePrintText(t.type) + '</p><p><b>Kategori:</b> ' + escapePrintText(t.category) + '</p><p><b>Uraian:</b> ' + escapePrintText(t.description) + '</p><img src="' + t.photo + '" alt="Bukti transaksi"></article>').join('') + '</section>' : '';
+        const cleanHtml = '<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Cetak Laporan Keuangan Desa - T.A. ' + selectedYear + '</title><script src="https://cdn.tailwindcss.com"><\/script><style>body { background-color: #ffffff !important; color: #0f172a !important; font-family: sans-serif; padding: 2rem; } table { width: 100%; border-collapse: collapse; margin-top: 1rem; margin-bottom: 1rem; } th, td { border: 1px solid #cbd5e1 !important; padding: 8px 10px !important; font-size: 11px !important; } th { background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: bold; } .evidence-appendix{page-break-before:always;margin-top:30px}.evidence-item{page-break-inside:avoid;border:1px solid #cbd5e1;padding:14px;margin:14px 0}.evidence-item img{display:block;max-width:100%;max-height:520px;object-fit:contain;margin-top:10px} #printable-report-area td img{max-width:72px;max-height:58px;object-fit:contain;display:block;margin:auto} #printable-report-area td{vertical-align:middle}.evidence-appendix h1{font-size:20px;font-weight:bold}.evidence-item h3{font-weight:bold;font-size:14px} @media print { @page { size: A4; margin: 1cm; } }</style></head><body>' + 
+          printArea.innerHTML + evidenceHtml +
+          '<script>window.onload = function() { setTimeout(() => { window.print(); }, 700); };<\/script></body></html>';
 
         printWindow.document.write(cleanHtml);
         printWindow.document.close();
@@ -1759,7 +1763,33 @@
         showToast('📊 Berhasil mengunduh laporan hutang desa format Excel (.xlsx)!');
       };
 
-      const handleSaveTransaction = (e) => {
+      const compressTransactionPhoto = (file) => new Promise((resolve, reject) => {
+        if (!file || !file.type || !file.type.startsWith('image/')) {
+          reject(new Error('File harus berupa gambar/foto.'));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('Foto gagal dibaca.'));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => reject(new Error('Foto tidak dapat diproses.'));
+          img.onload = () => {
+            const maxWidth = 300;
+            const scale = Math.min(1, maxWidth / img.width);
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            const ctx = canvas.getContext('2d');
+            if (!ctx) { reject(new Error('Pemrosesan foto tidak didukung browser.')); return; }
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.8));
+          };
+          img.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      });
+
+      const handleSaveTransaction = async (e) => {
         e.preventDefault();
         if (!userPermissions.canEdit) {
           showToast('⚠️ Akses Ditolak! Peran Anda tidak diizinkan mengubah transaksi.');
@@ -1781,83 +1811,86 @@
         const grossAmount = Number(formData.amount);
         const selectedAccount = accounts.find(a => a.id === formData.accountId);
 
-        if (editingTrx) {
-          const updatedTrxData = {
-            ...editingTrx,
-            type: trxType,
-            date: formData.date || editingTrx.date || getLocalDateString(),
-            category: finalCategory,
-            activity: finalActivity,
-            description: formData.description,
-            accountId: formData.accountId,
-            accountName: selectedAccount ? selectedAccount.name : 'Rekening Kas',
-            amount: grossAmount,
-            netAmount: grossAmount
-          };
+        try {
+          if (editingTrx) {
+            const updatedTrxData = {
+              ...editingTrx,
+              type: trxType,
+              date: formData.date || editingTrx.date || getLocalDateString(),
+              category: finalCategory,
+              activity: finalActivity,
+              description: formData.description,
+              accountId: formData.accountId,
+              accountName: selectedAccount ? selectedAccount.name : 'Rekening Kas',
+              amount: grossAmount,
+              netAmount: grossAmount,
+              photo: formData.photo || null
+            };
 
-          const trxRef = ref(db, `transactions/${editingTrx.idKey}`);
-          set(trxRef, updatedTrxData);
+            await set(ref(db, `transactions/${editingTrx.idKey}`), updatedTrxData);
+            const auditRef = push(ref(db, 'auditLogs'));
+            await set(auditRef, {
+              timestamp: new Date().toLocaleString('id-ID'),
+              user: currentUser.name,
+              action: `Mengedit transaksi ${editingTrx.id} menjadi ${formatIDR(grossAmount)}`,
+              module: trxType
+            });
+            showToast(`✅ Transaksi ${editingTrx.id} berhasil diperbarui!`);
+          } else {
+            const transactionYear = (formData.date || getLocalDateString()).slice(0, 4);
+            const newTrxId = `TRX-${transactionYear}-${Date.now().toString().slice(-4)}`;
+            const newTransaction = {
+              id: newTrxId,
+              date: formData.date || getLocalDateString(),
+              type: trxType,
+              category: finalCategory,
+              activity: finalActivity,
+              description: formData.description,
+              accountId: formData.accountId,
+              accountName: selectedAccount ? selectedAccount.name : 'Rekening Kas',
+              amount: grossAmount,
+              tax: 0,
+              netAmount: grossAmount,
+              recipient: formData.recipient || 'Pihak Terkait',
+              status: 'Disetujui',
+              approvedBy: currentUser.name,
+              approvedAt: new Date().toISOString().split('T')[0],
+              photo: formData.photo || null
+            };
 
-          const auditRef = push(ref(db, 'auditLogs'));
-          set(auditRef, {
-            timestamp: new Date().toLocaleString('id-ID'),
-            user: currentUser.name,
-            action: `Mengedit transaksi ${editingTrx.id} menjadi ${formatIDR(grossAmount)}`,
-            module: trxType
+            const newTrxRef = push(ref(db, 'transactions'));
+            await set(newTrxRef, newTransaction);
+
+            const updatedAccs = accounts.map(acc => {
+              if (acc.id === formData.accountId) {
+                const change = trxType === 'Pendapatan' ? grossAmount : -grossAmount;
+                return { ...acc, balance: (acc.balance || 0) + change };
+              }
+              return acc;
+            });
+            await set(ref(db, 'accounts'), updatedAccs);
+
+            const auditRef = push(ref(db, 'auditLogs'));
+            await set(auditRef, {
+              timestamp: new Date().toLocaleString('id-ID'),
+              user: currentUser.name,
+              action: `Membuat transaksi ${trxType} ${newTrxId} sebesar ${formatIDR(grossAmount)}`,
+              module: trxType
+            });
+            showToast(`✅ Transaksi ${newTrxId} berhasil disimpan ke Cloud`);
+          }
+
+          setIsModalTrxOpen(false);
+          setEditingTrx(null);
+          setFormData({
+            category: '', customCategory: '', activity: '', customActivity: '',
+            description: '', date: getLocalDateString(), accountId: '101', amount: '', recipient: '',
+            taxType: 'Tidak Ada', taxPercent: 0, photo: ''
           });
-
-          showToast(`✅ Transaksi ${editingTrx.id} berhasil diperbarui!`);
-        } else {
-          const transactionYear = (formData.date || getLocalDateString()).slice(0, 4);
-          const newTrxId = `TRX-${transactionYear}-${Date.now().toString().slice(-4)}`;
-          const newTransaction = {
-            id: newTrxId,
-            date: formData.date || getLocalDateString(),
-            type: trxType,
-            category: finalCategory,
-            activity: finalActivity,
-            description: formData.description,
-            accountId: formData.accountId,
-            accountName: selectedAccount ? selectedAccount.name : 'Rekening Kas',
-            amount: grossAmount,
-            tax: 0,
-            netAmount: grossAmount,
-            recipient: formData.recipient || 'Pihak Terkait',
-            status: 'Disetujui',
-            approvedBy: currentUser.name,
-            approvedAt: new Date().toISOString().split('T')[0]
-          };
-
-          const trxRef = ref(db, 'transactions');
-          const newTrxRef = push(trxRef);
-          set(newTrxRef, newTransaction);
-
-          const updatedAccs = accounts.map(acc => {
-            if (acc.id === formData.accountId) {
-              const change = trxType === 'Pendapatan' ? grossAmount : -grossAmount;
-              return { ...acc, balance: (acc.balance || 0) + change };
-            }
-            return acc;
-          });
-          set(ref(db, 'accounts'), updatedAccs);
-
-          const auditRef = push(ref(db, 'auditLogs'));
-          set(auditRef, {
-            timestamp: new Date().toLocaleString('id-ID'),
-            user: currentUser.name,
-            action: `Membuat transaksi ${trxType} ${newTrxId} sebesar ${formatIDR(grossAmount)}`,
-            module: trxType
-          });
-
-          showToast(`✅ Transaksi ${newTrxId} berhasil disimpan ke Cloud`);
+        } catch (error) {
+          console.error('Gagal menyimpan transaksi/lampiran:', error);
+          showToast('❌ Gagal menyimpan transaksi ke Cloud. Periksa koneksi dan izin database. Form tetap terbuka agar dapat dicoba kembali.');
         }
-
-        setIsModalTrxOpen(false);
-        setEditingTrx(null);
-        setFormData({ 
-          category: '', customCategory: '', activity: '', customActivity: '', 
-          description: '', date: getLocalDateString(), accountId: '101', amount: '', recipient: '', taxType: 'Tidak Ada', taxPercent: 0 
-        });
       };
 
       const handleDeleteTransaction = (t) => {
@@ -1922,7 +1955,8 @@
           amount: t.amount,
           recipient: t.recipient || '',
           taxType: 'Tidak Ada',
-          taxPercent: 0
+          taxPercent: 0,
+          photo: t.photo || ''
         });
         setIsModalTrxOpen(true);
       };
@@ -2296,6 +2330,7 @@
                         <button
                           onClick={() => { 
                             setEditingTrx(null); 
+                            setFormData(prev => ({ ...prev, photo: '' }));
                             setTrxType('Pendapatan'); 
                             setIsModalTrxOpen(true); 
                             setIsSidebarOpen(false);
@@ -2307,6 +2342,7 @@
                         <button
                           onClick={() => { 
                             setEditingTrx(null); 
+                            setFormData(prev => ({ ...prev, photo: '' }));
                             setTrxType('Pengeluaran'); 
                             setIsModalTrxOpen(true); 
                             setIsSidebarOpen(false);
@@ -2930,7 +2966,7 @@
                         />
                       </div>
 
-                      <div className="pt-3 flex gap-2 justify-end">
+                  <div className="pt-3 flex gap-2 justify-end">
                         <button type="button" onClick={() => setIsModalDebtOpen(false)} className="px-4 py-2.5 rounded-xl border border-white/20 font-bold text-slate-300 hover:bg-white/[0.05] transition">Batal</button>
                         <button type="submit" className="px-5 py-2.5 rounded-xl bg-amber-600/90 hover:bg-amber-500 text-white font-bold shadow-lg shadow-amber-950 border border-amber-400/45 transition">Simpan Hutang</button>
                       </div>
@@ -3199,7 +3235,7 @@
                     </div>
                     {userPermissions.canEdit && (
                       <button
-                        onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
+                        onClick={() => { setEditingTrx(null); setTrxType('Pendapatan'); setFormData(prev => ({ ...prev, date: getLocalDateString(), photo: '' })); setIsModalTrxOpen(true); }}
                         className="bg-emerald-600/70 hover:bg-emerald-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-emerald-400/30"
                       >
                         <i data-lucide="plus" className="w-4 h-4"></i> Catat Pendapatan
@@ -3355,7 +3391,7 @@
                     </div>
                     {userPermissions.canEdit && (
                       <button
-                        onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setFormData(prev => ({ ...prev, date: getLocalDateString() })); setIsModalTrxOpen(true); }}
+                        onClick={() => { setEditingTrx(null); setTrxType('Pengeluaran'); setFormData(prev => ({ ...prev, date: getLocalDateString(), photo: '' })); setIsModalTrxOpen(true); }}
                         className="bg-rose-600/70 hover:bg-rose-500 backdrop-blur-3xl text-white text-xs px-3.5 py-2 rounded-xl font-bold flex items-center gap-1.5 shadow-lg border border-rose-400/30"
                       >
                         <i data-lucide="plus" className="w-4 h-4"></i> Catat Belanja
@@ -3785,6 +3821,7 @@
                               <th className="p-2.5 border border-slate-300">Tanggal</th>
                               <th className="p-2.5 border border-slate-300">Kegiatan Terkait</th>
                               <th className="p-2.5 border border-slate-300">Uraian / Keterangan</th>
+                              <th className="p-2.5 border border-slate-300 text-center">Bukti Transaksi</th>
                               <th className="p-2.5 border border-slate-300 text-right">Penerimaan (Rp)</th>
                               <th className="p-2.5 border border-slate-300 text-right">Pengeluaran (Rp)</th>
                               <th className="p-2.5 border border-slate-300 text-right">Saldo (Rp)</th>
@@ -3797,7 +3834,7 @@
                               if (sortedTrx.length === 0) {
                                 return (
                                   <tr>
-                                    <td colSpan={6} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data transaksi tercatat</td>
+                                    <td colSpan={7} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data transaksi tercatat</td>
                                   </tr>
                                 );
                               }
@@ -3810,6 +3847,7 @@
                                     <td className="p-2.5 border border-slate-300">{t.date}</td>
                                     <td className="p-2.5 border border-slate-300 font-semibold">{t.activity || '-'}</td>
                                     <td className="p-2.5 border border-slate-300">{t.description}</td>
+                                    <td className="p-2 border border-slate-300 text-center">{t.photo ? <div className="flex flex-col items-center gap-1"><img src={t.photo} alt="Bukti transaksi" className="max-w-[72px] max-h-[58px] object-contain" /><span className="text-[9px] font-bold">{t.id || t.idKey || 'Terlampir'}</span></div> : <span className="text-slate-400">-</span>}</td>
                                     <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{isInc ? formatIDR(amt) : '-'}</td>
                                     <td className="p-2.5 border border-slate-300 text-right font-bold text-rose-700">{!isInc ? formatIDR(amt) : '-'}</td>
                                     <td className="p-2.5 border border-slate-300 text-right font-black text-slate-900">{formatIDR(runningBal)}</td>
@@ -3868,6 +3906,7 @@
                                 <th className="p-2.5 border border-slate-300">Kategori APBDes</th>
                                 <th className="p-2.5 border border-slate-300">Uraian / Keterangan Transaksi</th>
                                 <th className="p-2.5 border border-slate-300">Jenis</th>
+                                <th className="p-2.5 border border-slate-300 text-center">Bukti Transaksi</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Nominal (Rp)</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Saldo (Rp)</th>
                               </tr>
@@ -3881,7 +3920,7 @@
                                 if (filteredTrx.length === 0) {
                                   return (
                                     <tr>
-                                      <td colSpan={6} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data rincian transaksi kategori</td>
+                                      <td colSpan={7} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data rincian transaksi kategori</td>
                                     </tr>
                                   );
                                 }
@@ -3897,6 +3936,7 @@
                                       <td className="p-2.5 border border-slate-300 font-bold">{t.category}</td>
                                       <td className="p-2.5 border border-slate-300 text-slate-800">{t.description}</td>
                                       <td className="p-2.5 border border-slate-300 font-semibold">{t.type}</td>
+                                      <td className="p-2 border border-slate-300 text-center">{t.photo ? <div className="flex flex-col items-center gap-1"><img src={t.photo} alt="Bukti transaksi" className="max-w-[72px] max-h-[58px] object-contain" /><span className="text-[9px] font-bold">{t.id || t.idKey || 'Terlampir'}</span></div> : <span className="text-slate-400">-</span>}</td>
                                       <td className={`p-2.5 border border-slate-300 text-right font-bold ${isInc ? 'text-emerald-700' : 'text-rose-700'}`}>
                                         {isInc ? '+' : '-'}{formatIDR(amt)}
                                       </td>
@@ -3956,6 +3996,7 @@
                                 <th className="p-2.5 border border-slate-300">Jenis Kegiatan</th>
                                 <th className="p-2.5 border border-slate-300">Kategori APBDes</th>
                                 <th className="p-2.5 border border-slate-300">Uraian / Keterangan Transaksi</th>
+                                <th className="p-2.5 border border-slate-300 text-center">Bukti Transaksi</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Penerimaan (Rp)</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Pengeluaran (Rp)</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Saldo (Rp)</th>
@@ -3973,7 +4014,7 @@
                                 if (filteredTrx.length === 0) {
                                   return (
                                     <tr>
-                                      <td colSpan={7} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data rincian transaksi kegiatan</td>
+                                      <td colSpan={8} className="p-4 text-center text-slate-500 italic border border-slate-300">Belum ada data rincian transaksi kegiatan</td>
                                     </tr>
                                   );
                                 }
@@ -3990,6 +4031,7 @@
                                       <td className="p-2.5 border border-slate-300 font-bold text-emerald-900">{actName}</td>
                                       <td className="p-2.5 border border-slate-300">{t.category}</td>
                                       <td className="p-2.5 border border-slate-300 text-slate-800">{t.description}</td>
+                                      <td className="p-2 border border-slate-300 text-center">{t.photo ? <div className="flex flex-col items-center gap-1"><img src={t.photo} alt="Bukti transaksi" className="max-w-[72px] max-h-[58px] object-contain" /><span className="text-[9px] font-bold">{t.id || t.idKey || 'Terlampir'}</span></div> : <span className="text-slate-400">-</span>}</td>
                                       <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">
                                         {isInc ? formatIDR(amt) : '-'}
                                       </td>
@@ -4062,12 +4104,13 @@
                                 <th className="p-2.5 border border-slate-300">Keterangan / Uraian</th>
                                 <th className="p-2.5 border border-slate-300">Kategori</th>
                                 <th className="p-2.5 border border-slate-300">Kegiatan</th>
+                                <th className="p-2.5 border border-slate-300 text-center">Bukti Transaksi</th>
                                 <th className="p-2.5 border border-slate-300 text-right">Jumlah (Rp)</th>
                               </tr>
                             </thead>
                             <tbody>
                               {descriptionRevenueTransactions.length === 0 ? (
-                                <tr><td colSpan={6} className="p-4 text-center text-slate-500 italic border border-slate-300">Tidak ditemukan pendapatan dengan keterangan tersebut.</td></tr>
+                                <tr><td colSpan={7} className="p-4 text-center text-slate-500 italic border border-slate-300">Tidak ditemukan pendapatan dengan keterangan tersebut.</td></tr>
                               ) : descriptionRevenueTransactions.map((t, idx) => (
                                 <tr key={t.idKey || t.id || idx}>
                                   <td className="p-2.5 border border-slate-300 text-center">{idx + 1}</td>
@@ -4075,13 +4118,14 @@
                                   <td className="p-2.5 border border-slate-300 font-semibold">{t.description || '-'}</td>
                                   <td className="p-2.5 border border-slate-300">{t.category || '-'}</td>
                                   <td className="p-2.5 border border-slate-300">{t.activity || '-'}</td>
+                                  <td className="p-2 border border-slate-300 text-center">{t.photo ? <div className="flex flex-col items-center gap-1"><img src={t.photo} alt="Bukti transaksi" className="max-w-[72px] max-h-[58px] object-contain" /><span className="text-[9px] font-bold">{t.id || t.idKey || 'Terlampir'}</span></div> : <span className="text-slate-400">-</span>}</td>
                                   <td className="p-2.5 border border-slate-300 text-right font-bold text-emerald-700">{formatIDR(getSafeAmount(t.amount))}</td>
                                 </tr>
                               ))}
                             </tbody>
                             <tfoot>
                               <tr className="bg-slate-100 font-black">
-                                <td colSpan={5} className="p-2.5 border border-slate-300 text-right">TOTAL PENDAPATAN</td>
+                                <td colSpan={6} className="p-2.5 border border-slate-300 text-right">TOTAL PENDAPATAN</td>
                                 <td className="p-2.5 border border-slate-300 text-right text-emerald-800">{formatIDR(descriptionRevenueTotal)}</td>
                               </tr>
                             </tfoot>
@@ -4298,6 +4342,35 @@
                       className="w-full p-2.5 rounded-xl border border-white/20 bg-slate-900 text-slate-100 shadow-inner focus:outline-none focus:border-emerald-500"
                       required
                     />
+                  </div>
+
+                  <div className="rounded-2xl border border-dashed border-emerald-500/40 bg-emerald-950/20 p-3">
+                    <label className="font-bold block mb-2 text-slate-200">Upload Bukti Transaksi (Opsional)</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files && e.target.files[0];
+                        if (!file) return;
+                        try {
+                          const compressedPhoto = await compressTransactionPhoto(file);
+                          setFormData(prev => ({ ...prev, photo: compressedPhoto }));
+                          showToast('✅ Foto berhasil dikompres dan siap disimpan.');
+                        } catch (error) {
+                          console.error(error);
+                          showToast('❌ ' + (error.message || 'Foto gagal diproses.'));
+                        }
+                        e.target.value = '';
+                      }}
+                      className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:px-3 file:py-2 file:font-bold file:text-white"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">Pilih foto bukti belanja (JPG, PNG, dan format gambar lain). Foto otomatis dikompres sebelum disimpan bersama data transaksi.</p>
+                    {formData.photo ? (
+                      <div className="mt-3 flex items-start gap-3">
+                        <img src={formData.photo} alt="Pratinjau bukti transaksi" className="max-h-36 max-w-[150px] rounded-xl border border-white/20 object-contain bg-white" />
+                        <button type="button" onClick={() => setFormData(prev => ({ ...prev, photo: '' }))} className="px-3 py-2 rounded-lg bg-rose-950/50 border border-rose-500/40 text-rose-300 font-bold">Hapus Foto</button>
+                      </div>
+                    ) : <p className="text-[10px] text-slate-500 mt-2">Belum ada foto bukti transaksi yang dipilih.</p>}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
