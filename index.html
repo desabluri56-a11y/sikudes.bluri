@@ -26,13 +26,37 @@
     html, body {
       max-width: 100vw;
       width: 100%;
-      overflow-x: hidden;
+      height: 100%;
+      overflow: hidden;
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
     *, *:before, *:after {
       box-sizing: border-box;
+    }
+
+    /* SIKUDES: viewport dikunci; scroll hanya pada panel konten/sidebar */
+    html, body, #root {
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+    }
+    body { overscroll-behavior: none; }
+    #root { display: flex; flex-direction: column; }
+    .sikudes-main-scroll {
+      min-height: 0;
+      height: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-gutter: stable;
+    }
+    .sikudes-sidebar-scroll {
+      min-height: 0;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
     }
 
     /* Scrollbar halus untuk tabel di HP */
@@ -70,9 +94,9 @@
     }
   </style>
 </head>
-<body class="bg-gradient-to-br from-[#02050e] via-[#07101d] to-[#01050b] text-slate-100 min-h-screen font-sans selection:bg-emerald-500 selection:text-white relative overflow-x-hidden">
+<body class="bg-gradient-to-br from-[#02050e] via-[#07101d] to-[#01050b] text-slate-100 h-screen font-sans selection:bg-emerald-500 selection:text-white relative overflow-hidden">
 
-  <div id="root" class="w-full max-w-full overflow-x-hidden"></div>
+  <div id="root" class="w-full h-full max-w-full min-h-0 overflow-hidden"></div>
 
   <!-- Firebase App SDKs -->
   <script type="module">
@@ -261,6 +285,12 @@
     function App() {
       const [theme, setTheme] = useState('light');
       const [activeMenu, setActiveMenu] = useState('dashboard');
+      // Asisten pencarian keuangan: hasil hanya dihitung dari snapshot Firebase saat pengguna bertanya.
+      const [assistantQuestion, setAssistantQuestion] = useState('');
+      const [assistantResult, setAssistantResult] = useState(null);
+      const [assistantLoading, setAssistantLoading] = useState(false);
+      const [assistantExpandedSource, setAssistantExpandedSource] = useState(null);
+      const [assistantLastQuestion, setAssistantLastQuestion] = useState('');
 
       // TAMBAHKAN STATE INI UNTUK SIDEBAR MOBILE:
       const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -623,7 +653,8 @@
 
       // Tambahkan blok ini di bawahnya:
       useEffect(() => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        const contentArea = document.getElementById('sikudes-main-content');
+        if (contentArea) contentArea.scrollTo({ top: 0, behavior: 'smooth' });
       }, [activeMenu]);
 
       useEffect(() => {
@@ -776,7 +807,7 @@
             canEdit: true,
             canImport: true,
             canReset: role === 'admin',
-            allowedMenus: ['dashboard', 'master', 'budgeting', 'revenue', 'expenditure', 'loans', 'debts', 'bku', 'reports', 'cash_management', 'audit']
+            allowedMenus: ['dashboard', 'master', 'budgeting', 'revenue', 'expenditure', 'loans', 'debts', 'bku', 'reports', 'cash_management', 'audit', 'assistant']
           };
         }
 
@@ -786,7 +817,7 @@
             canEdit: false,
             canImport: false,
             canReset: false,
-            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku', 'cash_management']
+            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku', 'cash_management', 'assistant']
           };
         }
 
@@ -796,7 +827,7 @@
             canEdit: false,
             canImport: false,
             canReset: false,
-            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku', 'cash_management', 'reports', 'audit']
+            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku', 'cash_management', 'reports', 'audit', 'assistant']
           };
         }
 
@@ -806,7 +837,7 @@
             canEdit: false,
             canImport: false,
             canReset: false,
-            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku']
+            allowedMenus: ['dashboard', 'master', 'revenue', 'expenditure', 'bku', 'assistant']
           };
         }
 
@@ -816,11 +847,11 @@
             canEdit: false,
             canImport: false,
             canReset: false,
-            allowedMenus: ['dashboard', 'bku', 'reports', 'audit']
+            allowedMenus: ['dashboard', 'bku', 'reports', 'audit', 'assistant']
           };
         }
 
-        return { canEdit: false, canImport: false, canReset: false, allowedMenus: ['dashboard'] };
+        return { canEdit: false, canImport: false, canReset: false, allowedMenus: ['dashboard', 'assistant'] };
       }, [currentUser]);
 
       const availableActivities = useMemo(() => {
@@ -887,6 +918,406 @@
       const reportTransactions = useMemo(() => {
         return transactions.filter(t => isReportEligibleTransaction(t, selectedYear));
       }, [transactions, selectedYear]);
+
+
+      // Cetak hasil Asisten AI secara mandiri. Dialog browser menyediakan opsi "Save as PDF".
+      const handlePrintAssistantResult = () => {
+        if (!assistantResult) {
+          showToast('Belum ada hasil Asisten AI yang dapat dicetak. Tampilkan data terlebih dahulu.');
+          return;
+        }
+        const printWindow = window.open('', '_blank', 'width=1000,height=750');
+        if (!printWindow) {
+          showToast('Pop-up diblokir. Izinkan pop-up agar hasil Asisten AI dapat dicetak menjadi PDF.');
+          return;
+        }
+        const esc = (value) => String(value ?? '-').replace(/[&<>"']/g, ch => ({
+          '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+        }[ch]));
+        const money = (value) => formatIDR(getSafeAmount(value));
+        const village = villageProfile || {};
+        let headers = [];
+        let rows = [];
+        if (assistantResult.type === 'budget-list') {
+          const grouped = (assistantResult.details || []).some(x => x.income !== undefined || x.expense !== undefined);
+          headers = grouped ? ['Kelompok', 'Pendapatan', 'Belanja', 'Selisih Bersih', 'Jumlah Transaksi'] : ['Pos Anggaran', 'Pagu', 'Realisasi', 'Sisa', 'Serapan'];
+          rows = (assistantResult.details || []).map(x => grouped
+            ? [x.name, money(x.income), money(x.expense), money(getSafeAmount(x.income)-getSafeAmount(x.expense)), String(x.count || 0)]
+            : [x.name, money(x.balance), money(x.realized), money(x.remaining), x.percent == null ? '-' : `${Number(x.percent).toFixed(1)}%`]);
+        } else if (assistantResult.type === 'budget') {
+          headers = ['Keterangan', 'Nominal'];
+          rows = [
+            ['Pagu Anggaran', money(assistantResult.budget)],
+            ['Realisasi', money(assistantResult.realized)],
+            ['Sisa Anggaran', money(getSafeAmount(assistantResult.budget) - getSafeAmount(assistantResult.realized))]
+          ];
+          if (assistantResult.details?.length) {
+            rows.push(...assistantResult.details.map(x => [
+              `${x.date || '-'} | ${x.id || '-' } | ${x.description || x.category || '-'}`,
+              money(x.amount)
+            ]));
+          }
+        } else if (assistantResult.type === 'accounts') {
+          headers = ['Nama Rekening', 'Nomor', 'Jenis', 'Saldo'];
+          rows = (assistantResult.details || []).map(x => [x.name, x.number, x.type, money(x.balance)]);
+        } else {
+          headers = ['Tanggal', 'ID / Nama', 'Jenis / Status', 'Kategori', 'Kegiatan / Uraian', 'Rekening', 'Nominal'];
+          rows = (assistantResult.details || []).map(x => [
+            x.date, x.id || x.name, x.type || x.status, x.category,
+            [x.activity, x.description].filter(Boolean).join(' — '), x.account,
+            money(x.amount ?? x.balance ?? 0)
+          ]);
+        }
+        const tableHtml = rows.length
+          ? `<table><thead><tr>${headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(cell => `<td>${esc(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+          : '<p class="empty">Tidak ada rincian data pada hasil ini.</p>';
+        const now = new Date().toLocaleString('id-ID', { dateStyle: 'long', timeStyle: 'short' });
+        const html = `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8">
+          <title>${esc(assistantResult.title)} - SIKUDES</title>
+          <style>
+            @page{size:A4 landscape;margin:14mm 14mm 18mm; @bottom-right{content:'Halaman ' counter(page) ' dari ' counter(pages);font-size:8pt;color:#64748b}}
+            *{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#172033;font-size:10pt;margin:0}
+            .kop{text-align:center;border-bottom:3px double #334155;padding-bottom:12px;margin-bottom:18px}
+            .kop h1{font-size:16pt;margin:0 0 4px}.kop p{margin:2px 0;font-size:9pt}
+            h2{font-size:14pt;margin:14px 0 8px}.summary{font-size:15pt;font-weight:bold;margin:10px 0 14px;color:#0f5132}
+            .meta{font-size:9pt;color:#475569;margin:4px 0}.note{font-size:9pt;line-height:1.5;margin-top:14px;white-space:pre-wrap}
+            table{width:100%;border-collapse:collapse;margin-top:12px;table-layout:auto}
+            th,td{border:1px solid #94a3b8;padding:7px 6px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+            th{background:#e2e8f0;font-weight:bold}tr{page-break-inside:avoid}
+            .empty{padding:15px;border:1px solid #cbd5e1}.footer{margin-top:28px;display:flex;justify-content:flex-end}
+            .sign{text-align:center;width:230px;min-height:90px}.sign .space{height:55px}
+            @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+          </style></head><body>
+          <header class="kop"><h1>PEMERINTAH ${esc(village.regency || 'KABUPATEN LAMONGAN').toUpperCase()}</h1>
+          <p>${esc(village.district || 'KECAMATAN SOLOKURO').toUpperCase()}</p>
+          <h1>${esc(village.name || 'DESA BLURI').toUpperCase()}</h1>
+          <p>${esc(village.address || village.officeAddress || village.alamat || '')}</p></header>
+          <p class="meta"><b>Tahun Anggaran:</b> ${esc(selectedYear)} &nbsp; | &nbsp; <b>Dicetak:</b> ${esc(now)}</p>
+          <h2>${esc(assistantResult.title)}</h2>
+          <div class="summary">${esc(assistantResult.summary)}</div>
+          ${tableHtml}
+          <p class="note"><b>Keterangan / Sumber Data:</b><br>${esc(assistantResult.note || 'Data diambil dari hasil pembacaan Asisten SIKUDES.')}</p>
+          <div class="footer" style="display:flex;justify-content:space-between;gap:24px;margin-top:38px;break-inside:avoid">
+          <div class="sign"><p>Mengetahui,</p><p>Ketua BPD</p><div class="space" style="height:65px"></div><b><u>................................</u></b></div>
+          <div class="sign"><p>${esc(village.district || 'Solokuro')}, ${esc(new Date().toLocaleDateString('id-ID'))}</p><p>Kepala Desa</p><div class="space" style="height:65px"></div><b><u>${esc(village.headOfVillage || '................................')}</u></b></div>
+          <div class="sign"><p>Diperiksa,</p><p>Kaur Keuangan</p><div class="space" style="height:65px"></div><b><u>................................</u></b></div></div>
+          </body></html>`;
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => { try { printWindow.print(); } catch (e) { console.warn('Dialog cetak tidak dapat dibuka:', e); } }, 600);
+        showToast('Pratinjau cetak hasil Asisten AI dibuka. Pilih "Simpan sebagai PDF" pada tujuan printer.');
+      };
+
+      // Asisten Analisis & Pencarian Lintas-Database SIKUDES.
+      // Nominal selalu dihitung secara deterministik dari snapshot Firebase, bukan dikarang AI generatif.
+      const handleAskFinancialAssistant = async (questionOverride) => {
+        const question = String(questionOverride ?? assistantQuestion).trim();
+        if (!question) return;
+        const followUp = /^(dan|lalu|kemudian|sekarang|buatkan|tampilkan|uraikan|rincikan|bandingkan|kelompokkan|rekap|cetak|simpan|ubah|tambahkan|yang tadi|hasil tadi|perinci|lanjutkan)\b/i.test(question)
+          || /\b(tersebut|itu|yang tadi|hasil sebelumnya|data tadi)\b/i.test(question);
+        const effectiveQuestion = followUp && assistantLastQuestion
+          ? `${assistantLastQuestion}. Permintaan lanjutan: ${question}`
+          : question;
+        const printOnlyCommand = /^(cetak|print|unduh|download|simpan|jadikan|buatkan)\b/.test(question.toLocaleLowerCase('id-ID'))
+          && /(pdf|hasil|data|laporan|itu|tersebut)/.test(question.toLocaleLowerCase('id-ID'));
+        if (printOnlyCommand && assistantResult) {
+          handlePrintAssistantResult();
+          return;
+        }
+        setAssistantQuestion(question);
+        setAssistantLastQuestion(effectiveQuestion);
+        setAssistantLoading(true);
+        setAssistantResult(null);
+        setAssistantExpandedSource(null);
+        try {
+          if (!window.FirebaseDB || !window.FirebaseDB.db) throw new Error('Koneksi Firebase belum siap. Muat ulang halaman dan coba lagi.');
+          const { db, ref, get } = window.FirebaseDB;
+          const paths = ['transactions', 'accounts', 'budgetItems', 'loans', 'villageDebts', 'auditLogs', 'bookClosures', 'villageProfile'];
+          const snapshots = await Promise.all(paths.map(path => get(ref(db, path))));
+          const raw = Object.fromEntries(paths.map((path, index) => [path, snapshots[index].val()]));
+          const asList = (value, withKey = false) => {
+            if (Array.isArray(value)) return value.filter(Boolean).map((v, i) => withKey ? ({ idKey: String(i), ...(v || {}) }) : v);
+            if (value && typeof value === 'object') return Object.entries(value).map(([key, v]) => withKey ? ({ idKey: key, ...(v || {}) }) : (v || {}));
+            return [];
+          };
+          const allTransactions = asList(raw.transactions, true);
+          const liveAccounts = asList(raw.accounts);
+          const liveBudgets = asList(raw.budgetItems);
+          const liveLoans = asList(raw.loans, true);
+          const liveDebts = asList(raw.villageDebts, true);
+          const liveAudit = asList(raw.auditLogs, true);
+          const q = effectiveQuestion.toLocaleLowerCase('id-ID').normalize('NFC').replace(/[’']/g, '');
+          const monthNames = ['januari','februari','maret','april','mei','juni','juli','agustus','september','oktober','november','desember'];
+          const monthAliases = ['jan','feb','mar','apr','mei','jun','jul','agu','sep','okt','nov','des'];
+          let monthIndex = monthNames.findIndex(m => q.includes(m));
+          if (monthIndex < 0) monthIndex = monthAliases.findIndex((m, i) => new RegExp(`\\b${m}\\b`).test(q));
+          const yearMatch = q.match(/\b(20\d{2})\b/);
+          const allYears = /semua tahun|seluruh tahun|lintas tahun|dari awal|sepanjang waktu/.test(q);
+          const year = yearMatch ? yearMatch[1] : String(selectedYear || new Date().getFullYear());
+          const dateParts = (value) => {
+            const v = String(value || '').trim();
+            let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+            if (m) return { year: m[1], month: Number(m[2]) - 1, day: Number(m[3]) };
+            m = v.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+            if (m) return { year: m[3], month: Number(m[2]) - 1, day: Number(m[1]) };
+            return { year: '', month: -1, day: 0 };
+          };
+          const inYear = t => allYears || dateParts(t.date).year === year;
+          const validTransactions = allTransactions.filter(t => inYear(t) && isReportEligibleTransaction(t, dateParts(t.date).year || year));
+          const approvedOrValid = list => list.filter(t => getTransactionDirection(t.type) !== 'unknown' && getSafeAmount(t.amount) > 0 && (!t.status || ['disetujui','approved','approve','setuju','sudah disetujui'].includes(String(t.status).trim().toLowerCase())));
+          const total = list => list.reduce((sum, t) => sum + getSafeAmount(t.amount), 0);
+          const formatDate = v => v || 'Tanggal tidak tercatat';
+          const sourceLabel = t => t.id || t.idKey || 'ID tidak tersedia';
+          const makeTransactionDetails = list => list.slice(0, 150).map(t => ({ id: sourceLabel(t), idKey: t.idKey, date: formatDate(t.date), type: t.type || '-', category: t.category || '-', activity: t.activity || '-', description: t.description || '-', amount: getSafeAmount(t.amount), account: t.accountName || t.accountId || '-', status: t.status || 'Status tidak tercatat', photo: t.photo || null }));
+          const showTransactions = (list, title, intro, noteExtra = '') => ({ title, summary: intro, type: 'transactions', details: makeTransactionDetails(list), totalCount: list.length, totalAmount: total(list), note: `Sumber: ${list.length} transaksi valid/disetujui pada Firebase /transactions${allYears ? ' (semua tahun)' : `, Tahun ${year}`}. ${noteExtra} Klik transaksi untuk melihat rincian sumber.` });
+          const accountDetails = liveAccounts.map(a => ({ name: a.name || 'Rekening tanpa nama', number: a.accountNumber || '-', type: a.type || '-', balance: getSafeAmount(a.balance) }));
+          const normalizedText = t => `${t.id || ''} ${t.category || ''} ${t.activity || ''} ${t.description || ''} ${t.accountName || ''} ${t.accountId || ''} ${t.recipient || ''} ${t.status || ''}`.toLocaleLowerCase('id-ID');
+          const stopWords = new Set(['berapa','tampilkan','tolong','cari','lihat','daftar','data','transaksi','keuangan','desa','saya','untuk','pada','dari','dengan','yang','dan','atau','tahun','bulan','tanggal','total','jumlah','semua','seluruh','adalah','apa','saja','terkait','terhadap','dalam','sampai','hingga','per','nya','ini','itu','apakah','bisa','mohon','berapa','rupiah','rp']);
+          const cleanTerms = q.replace(/\b(20\d{2})\b/g, ' ').replace(/[?.,!]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w) && !monthNames.includes(w) && !monthAliases.includes(w));
+          const termScore = text => cleanTerms.reduce((score, term) => score + (text.includes(term) ? 1 : 0), 0);
+          const amountThreshold = (() => { const m = q.match(/(?:di atas|lebih dari|minimal|melebihi|>=?)\s*rp?\s*([\d.,]+)\s*(juta|jt|ribu|rb)?/); if (!m) return null; const n = getSafeAmount(m[1]); return n * (m[2] === 'juta' || m[2] === 'jt' ? 1000000 : (m[2] === 'ribu' || m[2] === 'rb' ? 1000 : 1)); })();
+          const directionFilter = /pendapatan|penerimaan|pemasukan/.test(q) ? 'in' : (/pengeluaran|belanja|pengeluaran|keluar/.test(q) ? 'out' : '');
+          const periodTransactions = validTransactions.filter(t => {
+            const d = dateParts(t.date);
+            return (monthIndex < 0 || d.month === monthIndex) && (!directionFilter || getTransactionDirection(t.type) === directionFilter);
+          });
+          const yearLabel = allYears ? 'seluruh tahun' : `tahun ${year}`;
+          const transactionQuery = /transaksi|pengeluaran|belanja|pendapatan|penerimaan|pemasukan|realisasi|pengeluaran|belum memiliki bukti|tanpa bukti|tanpa lampiran/.test(q);
+
+          // Saldo rekening dan rekening tertentu.
+          if (/saldo/.test(q) && /(rekening|kas|bank|seluruh|semua)/.test(q)) {
+            const accountTerms = cleanTerms.filter(w => !['saldo','rekening','kas','bank','seluruh','semua'].includes(w));
+            const matches = accountTerms.length ? accountDetails.filter(a => accountTerms.some(w => `${a.name} ${a.number} ${a.type}`.toLowerCase().includes(w))) : accountDetails;
+            if (!matches.length) setAssistantResult({ title: 'Rekening tidak ditemukan', summary: 'Tidak ada rekening yang cocok dengan kata kunci tersebut.', details: [], note: 'Sumber: Firebase /accounts. Periksa nama rekening pada menu Manajemen Rekening.' });
+            else setAssistantResult({ title: matches.length === 1 ? `Saldo ${matches[0].name}` : 'Saldo rekening', summary: formatIDR(matches.reduce((s,a)=>s+a.balance,0)), type: 'accounts', details: matches, note: `Sumber: Firebase /accounts. ${matches.length} rekening dibaca langsung dari database.` });
+          }
+          // Anggaran: sisa, pagu, realisasi, persentase, atau ringkasan semua pos.
+          else if (/anggaran|pagu|penyerapan|serapan/.test(q) && !(/kegiatan/.test(q) && /terbesar|tertinggi|paling banyak|menyerap/.test(q))) {
+            const budgetWords = cleanTerms.filter(w => !['sisa','realisasi','penyerapan','serapan','anggaran','pagu','persentase','persen','berapa','besar','tertinggi','terbesar','terendah','terkecil','kegiatan','paling','banyak','menyerap','seluruh','semua','pos','desa','apbdes'].includes(w));
+            const candidates = liveBudgets.filter(b => !budgetWords.length || budgetWords.some(w => `${b.name || ''} ${b.code || ''} ${b.category || ''}`.toLowerCase().includes(w))).map(b => {
+              const realization = validTransactions.filter(t => normalizeCategoryKey(t.category) === normalizeCategoryKey(b.name) && getTransactionDirection(t.type) === (String(b.category).toLowerCase() === 'pendapatan' ? 'in' : 'out'));
+              const budget = getSafeAmount(b.budget), realized = total(realization);
+              return { item: b, budget, realized, remaining: budget - realized, percent: budget > 0 ? realized / budget * 100 : null, realization };
+            });
+            if (!candidates.length) setAssistantResult({ title: 'Pos anggaran tidak ditemukan', summary: 'Tidak ada pos anggaran yang cocok dengan pertanyaan tersebut.', details: [], note: 'Sumber: Firebase /budgetItems. Sistem tidak membuat perkiraan pagu atau realisasi.' });
+            else if (budgetWords.length && candidates.length === 1) {
+              const b = candidates[0];
+              const showPercent = /persen|persentase|penyerapan|serapan/.test(q);
+              setAssistantResult({ title: `${/sisa/.test(q) ? 'Sisa anggaran' : 'Analisis anggaran'} ${b.item.name}`, summary: showPercent ? (b.percent === null ? 'Pagu belum tersedia' : `${b.percent.toFixed(1).replace('.', ',')}%`) : formatIDR(/pagu|anggaran awal/.test(q) && !/sisa|realisasi/.test(q) ? b.budget : (/realisasi/.test(q) ? b.realized : b.remaining)), type: 'budget', budget: b.budget, realized: b.realized, details: makeTransactionDetails(b.realization), totalCount: b.realization.length, note: `Sumber: Firebase /budgetItems (“${b.item.name}”) dan ${b.realization.length} transaksi valid pada /transactions, ${yearLabel}.` });
+            } else {
+              const rows = candidates.map(b => ({ name: b.item.name || '-', number: b.item.code || '-', type: b.item.category || '-', balance: b.budget, realized: b.realized, remaining: b.remaining, percent: b.percent }));
+              const ranked = /tertinggi|terbesar|paling banyak|terendah|terkecil/.test(q) ? [...rows].sort((a,b) => /terendah|terkecil/.test(q) ? (a.percent ?? -1)-(b.percent ?? -1) : b.realized-a.realized).slice(0, 10) : rows;
+              setAssistantResult({ title: 'Analisis anggaran APBDes', summary: `${ranked.length} pos anggaran ditemukan`, type: 'budget-list', details: ranked, note: `Sumber: master Firebase /budgetItems dan transaksi valid /transactions, ${yearLabel}. Realisasi dihitung dari kategori dan arah transaksi yang cocok.` });
+            }
+          }
+          // Pinjaman dan hutang desa.
+          else if (/pinjaman|peminjam|pelunasan/.test(q)) {
+            const list = liveLoans.filter(x => !cleanTerms.length || cleanTerms.some(w => `${x.borrower || ''} ${x.activity || ''} ${x.description || ''} ${x.status || ''}`.toLowerCase().includes(w)));
+            const open = list.filter(x => !/lunas/i.test(String(x.status || '')));
+            const chosen = /belum lunas|belum kembali|menunggak/.test(q) ? open : list;
+            const amount = chosen.reduce((s,x)=>s+getSafeAmount(x.amount),0);
+            setAssistantResult({ title: /belum lunas|belum kembali|menunggak/.test(q) ? 'Daftar pinjaman belum lunas' : 'Data pinjaman desa', summary: `${chosen.length} data · ${formatIDR(amount)}`, type: 'transactions', details: chosen.slice(0,150).map(x=>({id:x.id || x.idKey,idKey:x.idKey,date:x.date || '-',type:x.status || 'Pinjaman',category:'Pinjaman',activity:x.activity || '-',description:`${x.borrower || 'Peminjam tidak tercatat'} — ${x.description || '-'}`,amount:getSafeAmount(x.amount),account:'-',status:x.status || 'Belum tercatat'})), totalCount:chosen.length,totalAmount:amount,note:`Sumber: Firebase /loans. Nilai di atas adalah jumlah nominal data pinjaman yang cocok, bukan otomatis saldo kas.` });
+          }
+          else if (/hutang|utang|kreditur|kreditor/.test(q)) {
+            const list = liveDebts.filter(x => !cleanTerms.length || cleanTerms.some(w => `${x.creditor || ''} ${x.description || ''} ${x.status || ''}`.toLowerCase().includes(w)));
+            const amount = list.reduce((s,x)=>s+getSafeAmount(x.amount),0);
+            setAssistantResult({ title: 'Data hutang desa', summary: `${list.length} data · ${formatIDR(amount)}`, type: 'transactions', details: list.slice(0,150).map(x=>({id:x.id || x.idKey,idKey:x.idKey,date:x.date || '-',type:x.status || 'Hutang',category:'Hutang Desa',activity:'-',description:`${x.creditor || 'Kreditur tidak tercatat'} — ${x.description || '-'}`,amount:getSafeAmount(x.amount),account:'-',status:x.status || 'Belum tercatat'})), totalCount:list.length,totalAmount:amount,note:'Sumber: Firebase /villageDebts. Total merupakan penjumlahan nominal data yang cocok.' });
+          }
+          // Audit log / aktivitas pengguna.
+          else if (/audit|aktivitas pengguna|riwayat pengguna|siapa yang mencatat|log aktivitas/.test(q)) {
+            const list = liveAudit.filter(x => !cleanTerms.length || cleanTerms.some(w => `${x.user || ''} ${x.userName || ''} ${x.action || ''} ${x.description || ''} ${x.module || ''}`.toLowerCase().includes(w)));
+            setAssistantResult({ title: 'Riwayat aktivitas sistem', summary: `${list.length} catatan audit ditemukan`, type: 'transactions', details: list.slice(0,100).map(x=>({id:x.id || x.idKey,idKey:x.idKey,date:x.timestamp || x.date || '-',type:x.action || x.activity || 'Aktivitas',category:x.module || 'Audit Log',activity:x.userName || x.user || '-',description:x.description || x.details || '-',amount:0,account:'-',status:x.status || 'Tercatat'})), totalCount:list.length,totalAmount:0,note:'Sumber: Firebase /auditLogs. Format rincian mengikuti properti yang tersedia pada setiap catatan audit.' });
+          }
+          // Realisasi Dana Desa: jumlahkan belanja pada kategori Dana Desa yang valid.
+          else if (/dana desa|\\bdd\\b/.test(q) && /realisasi|total|berapa/.test(q)) {
+            const list = validTransactions.filter(t => {
+              const category = String(t.category || '').toLocaleLowerCase('id-ID');
+              return (category.includes('dana desa') || category.includes('(dd)') || category.startsWith('5.3')) && getTransactionDirection(t.type) === 'out';
+            });
+            const amount = total(list);
+            setAssistantResult({ ...showTransactions(list, `Realisasi belanja Dana Desa ${yearLabel}`, `${formatIDR(amount)} dari ${list.length} transaksi belanja yang cocok.`), summary: formatIDR(amount) });
+          }
+          // Status persetujuan: gunakan seluruh data, termasuk transaksi yang belum lolos validasi laporan.
+          else if (/belum disetujui|belum disahkan|menunggu persetujuan|pending|belum approve/.test(q)) {
+            const list = allTransactions.filter(t => inYear(t) && !['disetujui','approved','approve','setuju','sudah disetujui'].includes(String(t.status || '').trim().toLowerCase()));
+            setAssistantResult({ ...showTransactions(list, 'Transaksi belum disetujui', `Ditemukan ${list.length} transaksi yang statusnya belum tercatat sebagai disetujui.`, 'Daftar ini sengaja tidak dibatasi pada transaksi yang lolos filter laporan.'), note: `Sumber: seluruh data Firebase /transactions, ${yearLabel}; status kosong atau status selain disetujui ditampilkan untuk pemeriksaan.` });
+          }
+          // Deteksi kemungkinan transaksi ganda berdasarkan tanggal, nominal, kategori, dan uraian.
+          else if (/duplikat|ganda|transaksi sama|transaksi kembar/.test(q)) {
+            const groups = new Map();
+            allTransactions.filter(inYear).forEach(t => {
+              const key = [String(t.date || ''), getSafeAmount(t.amount), normalizeCategoryKey(t.category), String(t.description || '').trim().toLowerCase()].join('|');
+              if (!groups.has(key)) groups.set(key, []);
+              groups.get(key).push(t);
+            });
+            const duplicates = [...groups.values()].filter(g => g.length > 1).flat();
+            setAssistantResult(showTransactions(duplicates, 'Pemeriksaan kemungkinan transaksi ganda', `${duplicates.length} transaksi berada dalam kelompok dengan tanggal, nominal, kategori, dan uraian yang sama.`, 'Ini adalah indikasi untuk diperiksa, bukan keputusan otomatis bahwa transaksi pasti duplikat.'));
+          }
+          // Transaksi tanpa bukti / data administrasi yang belum lengkap.
+          else if (/tanpa bukti|belum memiliki bukti|belum ada bukti|tanpa lampiran|belum lengkap|tanpa keterangan/.test(q)) {
+            let list = validTransactions.filter(t => /tanpa keterangan/.test(q) ? !String(t.description || '').trim() : (!t.photo || !String(t.photo).trim()));
+            if (monthIndex >= 0) list = list.filter(t => dateParts(t.date).month === monthIndex);
+            setAssistantResult(showTransactions(list, /tanpa keterangan/.test(q) ? 'Transaksi tanpa keterangan' : 'Transaksi tanpa bukti foto', `Ditemukan ${list.length} transaksi yang memenuhi kriteria pemeriksaan.`, 'Pemeriksaan dilakukan pada properti photo/description di setiap data transaksi.'));
+          }
+          // Peringkat kegiatan berdasarkan total pengeluaran yang benar-benar tercatat.
+          else if (/kegiatan/.test(q) && /terbesar|tertinggi|paling banyak|menyerap|pengeluaran/.test(q) && /anggaran|pengeluaran|belanja|menyerap|terbesar|tertinggi/.test(q)) {
+            const groups = new Map();
+            validTransactions.filter(t => getTransactionDirection(t.type) === 'out').forEach(t => {
+              const name = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+              if (!groups.has(name)) groups.set(name, { name, amount: 0, count: 0, items: [] });
+              const g = groups.get(name); g.amount += getSafeAmount(t.amount); g.count += 1; g.items.push(t);
+            });
+            const ranked = [...groups.values()].sort((a,b)=>b.amount-a.amount).slice(0,10);
+            setAssistantResult({ title: 'Kegiatan dengan pengeluaran terbesar', summary: `${ranked.length} kegiatan teratas`, type: 'budget-list', details: ranked.map(x=>({name:x.name,number:`${x.count} transaksi`,type:'Kegiatan',balance:0,realized:x.amount,remaining:0,percent:null})), note: `Sumber: ${validTransactions.length} transaksi valid tahun ${year}; pengeluaran dikelompokkan menurut nama kegiatan.` });
+          }
+          // Jumlah atau total transaksi tanpa menyebut arah pendapatan/pengeluaran.
+          else if (/transaksi/.test(q) && /(jumlah|berapa banyak|berapa total|total transaksi)/.test(q)) {
+            const list = periodTransactions;
+            setAssistantResult({ ...showTransactions(list, 'Rekap jumlah transaksi', `${list.length} transaksi ditemukan dengan total nominal ${formatIDR(total(list))}.`), summary: `${list.length} transaksi` });
+          }
+          // Peringkat transaksi / kegiatan paling besar.
+          else if (/terbesar|tertinggi|paling besar|10 transaksi|lima transaksi|5 transaksi/.test(q) && transactionQuery) {
+            const list = [...periodTransactions].sort((a,b)=>getSafeAmount(b.amount)-getSafeAmount(a.amount)).slice(0, /10|sepuluh/.test(q) ? 10 : (/5|lima/.test(q) ? 5 : 10));
+            setAssistantResult(showTransactions(list, 'Transaksi dengan nominal terbesar', `Menampilkan ${list.length} transaksi bernilai terbesar pada ${yearLabel}.`));
+          }
+          // Pencarian pendapatan/pengeluaran berdasarkan isi kolom Keterangan/Uraian.
+          // Kata kunci boleh pendek (misalnya JM) dan dicocokkan tanpa membedakan huruf besar/kecil.
+          else if (directionFilter && /(?:keterangan|uraian)/.test(q) && /berapa|total|jumlah|tampilkan|cari|daftar/.test(q)) {
+            const descriptionMatch = q.match(/(?:dengan\s+)?(?:keterangan|uraian)\s*(?:yang\s+)?(?:mengandung\s+|berisi\s+|memuat\s+)?[\"']?(.+?)[\"']?\s*[?.!,]*$/i);
+            let descriptionKeyword = descriptionMatch ? descriptionMatch[1] : '';
+            descriptionKeyword = descriptionKeyword
+              .replace(/\b(?:tahun\s*)?20\d{2}\b/g, ' ')
+              .replace(/\b(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\b/g, ' ')
+              .replace(/[?.,!\"']/g, ' ').trim().toLocaleLowerCase('id-ID');
+            let list = validTransactions.filter(t => {
+              const date = dateParts(t.date);
+              const inSelectedMonth = monthIndex < 0 || date.month === monthIndex;
+              const directionMatches = getTransactionDirection(t.type) === directionFilter;
+              const description = String(t.description || '').toLocaleLowerCase('id-ID');
+              return inSelectedMonth && directionMatches && (!descriptionKeyword || description.includes(descriptionKeyword));
+            });
+            const directionName = directionFilter === 'in' ? 'Pendapatan' : 'Pengeluaran';
+            const keywordLabel = descriptionKeyword ? ` dengan keterangan “${descriptionKeyword}”` : ' berdasarkan keterangan';
+            const amount = total(list);
+            setAssistantResult({
+              ...showTransactions(list, `${directionName}${keywordLabel}`, `${list.length} transaksi ditemukan · ${formatIDR(amount)}`, `Pencarian dilakukan khusus pada kolom Keterangan/Uraian dengan kata kunci “${descriptionKeyword || 'semua keterangan'}”.`),
+              summary: formatIDR(amount)
+            });
+          }
+          // Ringkasan pendapatan/pengeluaran seluruh periode, atau per bulan.
+          else if (/berapa|total|jumlah|bandingkan|perbandingan|rata-rata|rata rata/.test(q) && /(pendapatan|penerimaan|pemasukan|pengeluaran|belanja)/.test(q)) {
+            const list = periodTransactions;
+            const amount = total(list);
+            if (/bandingkan|perbandingan/.test(q)) {
+              const incoming = list.filter(t=>getTransactionDirection(t.type)==='in'), outgoing = list.filter(t=>getTransactionDirection(t.type)==='out');
+              setAssistantResult({ title: 'Perbandingan pendapatan dan pengeluaran', summary: `Selisih ${formatIDR(total(incoming)-total(outgoing))}`, type: 'transactions', details: makeTransactionDetails(list), totalCount:list.length,totalAmount:amount, note:`Pendapatan ${formatIDR(total(incoming))} dari ${incoming.length} transaksi; pengeluaran ${formatIDR(total(outgoing))} dari ${outgoing.length} transaksi. Sumber: Firebase /transactions, ${yearLabel}.` });
+            } else if (/rata-rata|rata rata/.test(q)) {
+              const divisor = monthIndex >= 0 ? 1 : 12;
+              setAssistantResult({ ...showTransactions(list, 'Rata-rata transaksi per bulan', `Rata-rata ${formatIDR(amount/divisor)} berdasarkan ${list.length} transaksi pada ${yearLabel}.`), summary: formatIDR(amount/divisor) });
+            } else setAssistantResult({ ...showTransactions(list, `${directionFilter==='in'?'Total pendapatan':directionFilter==='out'?'Total pengeluaran':'Total transaksi'} ${monthIndex>=0?'bulan '+monthNames[monthIndex]+' ':''}${yearLabel}`, `${list.length} transaksi · ${formatIDR(amount)}`), summary: formatIDR(amount) });
+          }
+          // Laporan APBDes resmi dan rekap agregat: seluruh angka dihitung dari snapshot Firebase.
+          else if (/laporan apbdes|laporan apb desa|pertanggungjawaban|laporan realisasi apbdes|lpj apbdes/.test(q)) {
+            const revenueBudgets = liveBudgets.filter(b => /pendapatan/i.test(String(b.category || b.type || '')));
+            const expenseBudgets = liveBudgets.filter(b => !/pendapatan/i.test(String(b.category || b.type || '')));
+            const budgetRevenue = total(revenueBudgets.map(b => ({ amount: b.budget })));
+            const budgetExpense = total(expenseBudgets.map(b => ({ amount: b.budget })));
+            const actualRevenue = total(validTransactions.filter(t => getTransactionDirection(t.type) === 'in'));
+            const actualExpense = total(validTransactions.filter(t => getTransactionDirection(t.type) === 'out'));
+            const rows = [
+              { name: 'Pendapatan', number: 'Anggaran', type: 'APBDes', balance: budgetRevenue, realized: actualRevenue, remaining: budgetRevenue-actualRevenue, percent: budgetRevenue>0?actualRevenue/budgetRevenue*100:null },
+              { name: 'Belanja', number: 'Anggaran', type: 'APBDes', balance: budgetExpense, realized: actualExpense, remaining: budgetExpense-actualExpense, percent: budgetExpense>0?actualExpense/budgetExpense*100:null },
+              { name: 'Surplus / (Defisit)', number: 'Realisasi', type: 'APBDes', balance: budgetRevenue-budgetExpense, realized: actualRevenue-actualExpense, remaining: (budgetRevenue-budgetExpense)-(actualRevenue-actualExpense), percent: null }
+            ];
+            setAssistantResult({
+              title: /pertanggungjawaban|lpj/.test(q) ? 'Laporan Pertanggungjawaban Pelaksanaan APBDes' : 'Laporan Realisasi APBDes',
+              summary: `Realisasi pendapatan ${formatIDR(actualRevenue)} · realisasi belanja ${formatIDR(actualExpense)}`,
+              type: 'budget-list', details: rows,
+              note: `Tahun Anggaran ${year}. Data dihitung dari master /budgetItems dan transaksi valid/disetujui /transactions. Ini adalah draf rekap berbasis data sistem; cocokkan dengan dokumen penetapan APBDes, perubahan APBDes, SILPA, pembiayaan, dan format regulasi yang berlaku sebelum ditandatangani.`
+            });
+          }
+          else if (/rekap|ringkasan|perbandingan|bandingkan/.test(q) && /(per bulan|tiap bulan|setiap bulan|bulanan)/.test(q) && /(pendapatan|penerimaan|pemasukan|pengeluaran|belanja|keuangan)/.test(q)) {
+            const groups = new Map();
+            const monthLabels = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+            periodTransactions.forEach(t => {
+              const d = dateParts(t.date); if (d.month < 0 || d.month > 11) return;
+              const key = `${d.year}-${String(d.month+1).padStart(2,'0')}`;
+              if (!groups.has(key)) groups.set(key,{name:`${monthLabels[d.month]} ${d.year}`,number:key,type:'Bulanan',balance:0,realized:0,remaining:0,percent:null,income:0,expense:0,count:0});
+              const g=groups.get(key), amount=getSafeAmount(t.amount);
+              if (getTransactionDirection(t.type)==='in') g.income+=amount;
+              if (getTransactionDirection(t.type)==='out') g.expense+=amount;
+              g.count++;
+            });
+            const rows=[...groups.values()].sort((a,b)=>a.number.localeCompare(b.number)).map(g=>({...g, balance:g.income, realized:g.expense, remaining:g.income-g.expense}));
+            setAssistantResult({title:'Rekap Pendapatan dan Belanja Per Bulan',summary:`${rows.length} bulan memiliki transaksi pada ${yearLabel}`,type:'budget-list',details:rows,note:'Pendapatan dan belanja dikelompokkan berdasarkan tanggal transaksi. Kolom Pagu/Realisasi pada tampilan rekap mewakili pendapatan, belanja, dan selisih bersih bulanan; bukan pagu anggaran.'});
+          }
+          else if (/per bidang|tiap bidang|setiap bidang|berdasarkan bidang/.test(q)) {
+            const groups = new Map();
+            periodTransactions.forEach(t => {
+              const label = String(t.bidang || t.field || t.fieldName || t.category || t.activity || 'Bidang tidak tercatat').trim();
+              if (!groups.has(label)) groups.set(label,{name:label,number:'',type:'Bidang',balance:0,realized:0,remaining:0,percent:null,income:0,expense:0,count:0});
+              const g=groups.get(label), amount=getSafeAmount(t.amount);
+              if(getTransactionDirection(t.type)==='in') g.income+=amount;
+              if(getTransactionDirection(t.type)==='out') g.expense+=amount;
+              g.count++;
+            });
+            const rows=[...groups.values()].sort((a,b)=>(b.income+b.expense)-(a.income+a.expense)).map(g=>({...g,balance:g.income,realized:g.expense,remaining:g.income-g.expense}));
+            setAssistantResult({title:'Rekap Keuangan Per Bidang',summary:`${rows.length} kelompok bidang/kategori ditemukan`,type:'budget-list',details:rows,note:'Pengelompokan menggunakan kolom bidang/field jika tersedia; jika tidak tersedia, sistem memakai kategori transaksi, lalu nama kegiatan. Periksa label kelompok sebelum digunakan sebagai laporan resmi.'});
+          }
+          else if (/per sumber dana|tiap sumber dana|setiap sumber dana|berdasarkan sumber dana/.test(q)) {
+            const groups = new Map();
+            periodTransactions.forEach(t => {
+              const label = String(t.fundSource || t.fundingSource || t.sourceOfFund || t.sumberDana || t.source || t.accountName || t.accountId || 'Sumber dana tidak tercatat').trim();
+              if (!groups.has(label)) groups.set(label,{name:label,number:'',type:'Sumber Dana',balance:0,realized:0,remaining:0,percent:null,income:0,expense:0,count:0});
+              const g=groups.get(label), amount=getSafeAmount(t.amount);
+              if(getTransactionDirection(t.type)==='in') g.income+=amount;
+              if(getTransactionDirection(t.type)==='out') g.expense+=amount;
+              g.count++;
+            });
+            const rows=[...groups.values()].sort((a,b)=>(b.income+b.expense)-(a.income+a.expense)).map(g=>({...g,balance:g.income,realized:g.expense,remaining:g.income-g.expense}));
+            setAssistantResult({title:'Rekap Pendapatan dan Belanja Per Sumber Dana',summary:`${rows.length} sumber dana/rekening ditemukan`,type:'budget-list',details:rows,note:'Sistem memakai kolom sumber dana yang tersedia pada transaksi. Jika sumber dana tidak tersimpan, pengelompokan memakai rekening transaksi; periksa kembali sebelum pelaporan.'});
+          }
+          // Perbandingan pagu dan realisasi seluruh pos, terpisah pendapatan dan belanja.
+          else if (/bandingkan|perbandingan/.test(q) && /(anggaran|pagu|realisasi)/.test(q)) {
+            const rows = liveBudgets.map(b => {
+              const direction = /pendapatan/i.test(String(b.category || b.type || '')) ? 'in' : 'out';
+              const matched = validTransactions.filter(t => normalizeCategoryKey(t.category)===normalizeCategoryKey(b.name) && getTransactionDirection(t.type)===direction);
+              const budget=getSafeAmount(b.budget), realized=total(matched);
+              return {name:b.name||'Pos tanpa nama',number:b.code||'',type:b.category||'Belanja',balance:budget,realized,remaining:budget-realized,percent:budget>0?realized/budget*100:null};
+            });
+            setAssistantResult({title:'Perbandingan Anggaran dan Realisasi APBDes',summary:`${rows.length} pos anggaran dibandingkan`,type:'budget-list',details:rows,note:'Realisasi dihitung dengan mencocokkan kategori transaksi dan arah pendapatan/belanja. Pos yang tidak cocok dapat menunjukkan realisasi nol; pastikan penamaan kategori konsisten.'});
+          }
+          // Saldo bersih kegiatan dihitung dari pendapatan dikurangi pengeluaran.
+          else if (/saldo kegiatan|sisa dana kegiatan|dana kegiatan/.test(q)) {
+            const target = cleanTerms.join(' ');
+            const related = validTransactions.filter(t => `${t.activity || ''} ${t.category || ''}`.toLowerCase().includes(target));
+            const incoming = total(related.filter(t=>getTransactionDirection(t.type)==='in'));
+            const outgoing = total(related.filter(t=>getTransactionDirection(t.type)==='out'));
+            setAssistantResult({ title: 'Saldo bersih kegiatan', summary: formatIDR(incoming-outgoing), type: 'transactions', details:makeTransactionDetails(related), totalCount:related.length,totalAmount:incoming-outgoing,note:`Pendapatan terkait ${formatIDR(incoming)} dikurangi pengeluaran ${formatIDR(outgoing)}. Sumber: Firebase /transactions, ${yearLabel}.` });
+          }
+          // Pencarian umum lintas field transaksi: pengguna bebas menyebut kegiatan, kategori, rekening, penerima, ID, atau uraian.
+          else {
+            let candidates = allTransactions.filter(t => allYears || !dateParts(t.date).year || dateParts(t.date).year === year);
+            if (monthIndex >= 0) candidates = candidates.filter(t => dateParts(t.date).month === monthIndex);
+            if (directionFilter) candidates = candidates.filter(t=>getTransactionDirection(t.type)===directionFilter);
+            if (amountThreshold !== null) candidates = candidates.filter(t=>getSafeAmount(t.amount)>=amountThreshold);
+            const ranked = candidates.map(t=>({t,score:termScore(normalizedText(t))})).filter(x=>cleanTerms.length ? x.score>0 : transactionQuery).sort((a,b)=>b.score-a.score || getSafeAmount(b.t.amount)-getSafeAmount(a.t.amount));
+            const found = ranked.map(x=>x.t);
+            if (found.length) setAssistantResult(showTransactions(found, 'Hasil pencarian seluruh transaksi', `Ditemukan ${found.length} data yang cocok. ${cleanTerms.length ? 'Pencocokan dilakukan pada ID, kategori, kegiatan, uraian, rekening, penerima, dan status.' : 'Hasil mengikuti filter pertanyaan.'}`));
+            else {
+              const availableNodes = paths.filter(path => raw[path] !== null && raw[path] !== undefined);
+              setAssistantResult({ title: 'Belum menemukan data yang cocok', summary: 'Tidak ada data yang cukup cocok untuk menjawab pertanyaan tersebut.', details: [], note: `Database yang berhasil diperiksa: ${availableNodes.join(', ') || 'belum ada node yang terbaca'}. Coba sebutkan nama kegiatan, kategori APBDes, rekening, bulan, ID transaksi, pinjaman, hutang, atau audit log. Sistem tidak membuat angka perkiraan.` });
+            }
+          }
+        } catch (error) {
+          console.error('Asisten keuangan gagal membaca Firebase:', error);
+          setAssistantResult({ title: 'Tidak dapat membaca data', summary: error.message || 'Terjadi kendala saat mengambil data langsung dari Firebase.', details: [], note: 'Nominal tidak ditampilkan karena sumber data belum berhasil diverifikasi.' });
+        } finally {
+          setAssistantLoading(false);
+        }
+      };
 
       // Laporan keterangan hanya mengambil transaksi pendapatan yang valid pada tahun terpilih.
       // Pencarian tidak peka huruf besar/kecil dan mencocokkan teks di bagian mana pun dari keterangan.
@@ -2135,10 +2566,11 @@
       }
 
       return (
-        <div className="min-h-screen w-full max-w-full min-w-0 font-sans bg-gradient-to-br from-[#02050e] via-[#07101d] to-[#01050b] text-slate-100 relative overflow-x-hidden"><style>{`
+        <div className="h-screen w-full max-w-full min-w-0 min-h-0 flex flex-col font-sans bg-gradient-to-br from-[#02050e] via-[#07101d] to-[#01050b] text-slate-100 relative overflow-hidden"><style>{`
             *, *::before, *::after { box-sizing: border-box; }
-            html, body, #root { width: 100%; max-width: 100%; min-width: 0; }
-            body { overflow-x: hidden; }
+            html, body, #root { width: 100%; height: 100%; max-width: 100%; min-width: 0; min-height: 0; }
+            body { overflow: hidden; }
+            #root { display: flex; flex-direction: column; }
             @media (max-width: 639px) {
               .bku-responsive-table { display: block; width: 100%; }
               .bku-responsive-table thead { display: none; }
@@ -2171,7 +2603,7 @@
           <div className="absolute bottom-10 right-10 w-[600px] h-[600px] bg-teal-500/10 rounded-full blur-[180px] pointer-events-none"></div>
 
           {/* NAVBAR */}
-          <header className="sticky top-0 z-35 border-b border-white/15 bg-white/[0.02] backdrop-blur-[35px] px-4 py-3 shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
+          <header className="relative z-35 shrink-0 w-full border-b border-white/15 bg-slate-950/90 backdrop-blur-[35px] px-4 py-3 shadow-[0_4px_30px_rgba(0,0,0,0.3)]">
             <div className="max-w-7xl mx-auto flex items-center justify-between">
               <div className="flex items-center gap-3">
                 {/* TOMBOL GARIS 3 (HAMBURGER) - Hanya tampil di tampilan mobile/HP */}
@@ -2226,7 +2658,7 @@
           )}
 
          {/* MAIN CONTAINER */}
-          <div className="w-full max-w-7xl min-w-0 mx-auto px-2 sm:px-4 py-3 sm:py-6 flex flex-col md:flex-row gap-4 sm:gap-6 relative z-10 items-start overflow-x-hidden">
+          <div className="w-full max-w-7xl min-w-0 mx-auto px-2 sm:px-4 py-2 sm:py-3 flex-1 min-h-0 flex flex-col md:flex-row gap-3 sm:gap-5 relative z-10 items-stretch overflow-hidden">
             
             {/* SIDEBAR */}
             {/* OVERLAY HITAM UNTUK MOBILE (Jika sidebar dibuka) */}
@@ -2239,8 +2671,8 @@
 
             {/* SIDEBAR NAVIGATION (Responsif Mobile & Desktop) */}
             <aside className={`
-              fixed md:sticky top-0 md:top-20 z-40 md:z-auto h-full md:h-[calc(100vh-6rem)]
-              w-72 md:w-64 shrink-0 overflow-y-auto transition-transform duration-300 ease-in-out p-4 md:p-0 md:pr-1 space-y-1
+              fixed md:relative top-0 md:top-0 z-40 md:z-auto h-full md:h-full max-h-full
+              w-72 md:w-64 shrink-0 overflow-y-auto sikudes-sidebar-scroll transition-transform duration-300 ease-in-out p-4 md:p-0 md:pr-1 space-y-1
               bg-slate-950/95 md:bg-transparent border-r border-white/10 md:border-r-0
               ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
             `}>
@@ -2259,6 +2691,7 @@
                 <nav className="space-y-1">
                   {[
                     { id: 'dashboard', label: 'Dashboard APBDes', icon: 'layout-dashboard' },
+                    { id: 'assistant', label: 'Asisten AI', icon: 'sparkles' },
                     { id: 'master', label: 'Data Master Desa', icon: 'building-2' },
                     { id: 'budgeting', label: 'Penganggaran (APBDes)', icon: 'layers' },
                     { id: 'revenue', label: 'Penerimaan / Pendapatan', icon: 'arrow-down-left' },
@@ -2359,7 +2792,79 @@
             </aside>
 
             {/* MAIN CONTENT AREA */}
-            <main className="flex-1 min-w-0 w-full max-w-full space-y-6">
+            <main id="sikudes-main-content" className="sikudes-main-scroll flex-1 min-w-0 w-full max-w-full space-y-6 px-0.5 pb-6">
+
+              {activeMenu === 'assistant' && (
+                <div className="space-y-5">
+                  <div className="relative overflow-hidden rounded-3xl border border-emerald-400/25 bg-gradient-to-br from-emerald-950/70 via-slate-900/90 to-cyan-950/60 p-5 md:p-7 shadow-2xl">
+                    <div className="absolute -right-12 -top-16 h-48 w-48 rounded-full bg-emerald-400/10 blur-3xl pointer-events-none"></div>
+                    <div className="relative flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5">
+                      <div className="flex items-center gap-3">
+                        <div className="h-12 w-12 rounded-2xl bg-emerald-400/15 border border-emerald-300/30 flex items-center justify-center text-emerald-300"><i data-lucide="sparkles" className="w-6 h-6"></i></div>
+                        <div><h2 className="text-xl md:text-2xl font-black text-white">Asisten Data Keuangan Desa</h2><p className="text-xs text-emerald-100/80 mt-1">Pencarian dan perhitungan langsung dari Firebase SIKUDES</p></div>
+                      </div>
+                      <span className="self-start md:self-auto rounded-full bg-emerald-400/15 border border-emerald-300/30 px-3 py-1 text-[10px] font-bold text-emerald-200">DATA LIVE · TANPA TEBAK NOMINAL</span>
+                    </div>
+                    <form onSubmit={(e) => { e.preventDefault(); handleAskFinancialAssistant(); }} className="relative space-y-3">
+                      <label className="block text-xs font-bold text-slate-200">Tanyakan data keuangan desa</label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input value={assistantQuestion} onChange={e => setAssistantQuestion(e.target.value)} placeholder="Contoh: Berapa pengeluaran bulan Oktober?" className="flex-1 min-w-0 rounded-xl border border-white/20 bg-slate-950/70 px-4 py-3 text-sm text-white placeholder:text-slate-500 outline-none focus:border-emerald-400" />
+                        <button type="submit" disabled={assistantLoading || !assistantQuestion.trim()} className="rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 px-5 py-3 text-sm font-black text-slate-950 flex items-center justify-center gap-2"><i data-lucide={assistantLoading ? 'loader-circle' : 'search'} className={`w-4 h-4 ${assistantLoading ? 'animate-spin' : ''}`}></i>{assistantLoading ? 'Menganalisis...' : 'Tanyakan'}</button>
+                      </div>
+                    </form>
+                    <div className="relative mt-4">
+                      <p className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-2">Coba pertanyaan berikut</p>
+                      <div className="flex flex-wrap gap-2">
+                        {['Berapa pengeluaran bulan Oktober?', 'Tampilkan 10 transaksi terbesar tahun ini', 'Kegiatan apa yang paling banyak menyerap anggaran?', 'Bandingkan pendapatan dan pengeluaran tahun 2026', 'Tampilkan transaksi tanpa bukti', 'Berapa saldo Bank Jatim?', 'Tampilkan pinjaman yang belum lunas', 'Cari transaksi untuk pembangunan jalan', 'Tampilkan aktivitas pengguna'].map((sample, idx) => (
+                          <button key={idx} type="button" onClick={() => { setAssistantQuestion(sample); handleAskFinancialAssistant(sample); }} className="text-left text-[11px] rounded-full border border-white/15 bg-white/[0.06] hover:bg-emerald-500/15 hover:border-emerald-400/40 px-3 py-2 text-slate-200 transition">{sample}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {assistantLoading && <div className="rounded-2xl border border-emerald-400/20 bg-white/[0.03] p-8 text-center"><i data-lucide="loader-circle" className="w-8 h-8 animate-spin text-emerald-400 mx-auto mb-3"></i><p className="text-sm font-bold text-slate-200">Mengambil dan memverifikasi data dari Firebase...</p><p className="text-xs text-slate-500 mt-1">Transaksi, anggaran, rekening, pinjaman, hutang desa, dan audit log dibaca langsung saat pertanyaan dikirim.</p></div>}
+
+                  {assistantResult && !assistantLoading && (
+                    <div className="rounded-3xl border border-white/15 bg-white/[0.035] backdrop-blur-xl p-5 md:p-6 space-y-5 shadow-xl">
+                      <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-4">
+                        <div><p className="text-[10px] uppercase tracking-wider font-bold text-emerald-300 mb-1">Hasil pencarian terverifikasi</p><h3 className="text-lg font-black text-white">{assistantResult.title}</h3></div>
+                        <span className="rounded-full bg-emerald-500/10 border border-emerald-400/20 px-2.5 py-1 text-[10px] text-emerald-300 font-bold">Firebase</span>
+                      </div>
+                      <div className="text-2xl md:text-3xl font-black text-emerald-300 break-words">{assistantResult.summary}</div>
+                      <div className="flex flex-wrap gap-2 no-print">
+                        <button type="button" onClick={handlePrintAssistantResult} className="rounded-xl bg-rose-500 hover:bg-rose-400 text-white px-4 py-2.5 text-xs font-bold flex items-center gap-2 shadow-lg">
+                          <i data-lucide="file-down" className="w-4 h-4"></i> Cetak / Simpan PDF
+                        </button>
+                        <button type="button" onClick={() => { const text = [assistantResult.title, assistantResult.summary, assistantResult.note || '', ...(assistantResult.details || []).map(x => JSON.stringify(x))].join('\n'); navigator.clipboard?.writeText(text).then(() => showToast('Ringkasan hasil berhasil disalin.')).catch(() => showToast('Tidak dapat menyalin otomatis pada browser ini.')); }} className="rounded-xl border border-white/20 hover:bg-white/10 text-slate-200 px-4 py-2.5 text-xs font-bold flex items-center gap-2">
+                          <i data-lucide="copy" className="w-4 h-4"></i> Salin Hasil
+                        </button>
+                      </div>
+                      {assistantResult.type === 'budget-list' && <div className="overflow-x-auto rounded-xl border border-white/10"><table className="w-full text-xs"><thead className="bg-white/[0.06] text-slate-300"><tr><th className="p-3 text-left">{assistantResult.details.some(b=>b.income!==undefined) ? 'Kelompok' : 'Pos anggaran'}</th><th className="p-3 text-right">{assistantResult.details.some(b=>b.income!==undefined) ? 'Pendapatan' : 'Pagu'}</th><th className="p-3 text-right">{assistantResult.details.some(b=>b.income!==undefined) ? 'Belanja' : 'Realisasi'}</th><th className="p-3 text-right">{assistantResult.details.some(b=>b.income!==undefined) ? 'Selisih' : 'Sisa'}</th><th className="p-3 text-right">{assistantResult.details.some(b=>b.income!==undefined) ? 'Transaksi' : 'Serapan'}</th></tr></thead><tbody>{assistantResult.details.map((b,i)=><tr key={i} className="border-t border-white/10"><td className="p-3 text-white">{b.name}</td><td className="p-3 text-right">{formatIDR(b.income!==undefined?b.income:b.balance)}</td><td className="p-3 text-right text-rose-300">{formatIDR(b.expense!==undefined?b.expense:b.realized)}</td><td className="p-3 text-right text-emerald-300">{formatIDR(b.income!==undefined?b.income-b.expense:b.remaining)}</td><td className="p-3 text-right">{b.income!==undefined?`${b.count||0} trx`:(b.percent==null?'-':`${b.percent.toFixed(1)}%`)}</td></tr>)}</tbody></table></div>}
+                      {assistantResult.type === 'budget' && <div className="grid grid-cols-1 sm:grid-cols-3 gap-3"><div className="rounded-xl bg-white/[0.04] p-3"><p className="text-[10px] text-slate-400">Pagu anggaran</p><p className="font-bold text-white">{formatIDR(assistantResult.budget)}</p></div><div className="rounded-xl bg-white/[0.04] p-3"><p className="text-[10px] text-slate-400">Realisasi belanja</p><p className="font-bold text-rose-300">{formatIDR(assistantResult.realized)}</p></div><div className="rounded-xl bg-white/[0.04] p-3"><p className="text-[10px] text-slate-400">Sisa anggaran</p><p className="font-bold text-emerald-300">{formatIDR(assistantResult.budget - assistantResult.realized)}</p></div></div>}
+                      {assistantResult.type === 'transactions' && <div className="flex flex-wrap gap-3 text-xs"><span className="rounded-lg bg-white/[0.05] px-3 py-2 text-slate-300">Jumlah transaksi: <b className="text-white">{assistantResult.totalCount}</b></span><span className="rounded-lg bg-white/[0.05] px-3 py-2 text-slate-300">Total nominal: <b className="text-emerald-300">{formatIDR(assistantResult.totalAmount)}</b></span></div>}
+                      {assistantResult.type !== 'budget-list' && assistantResult.details && assistantResult.details.length > 0 && (
+                        <div className="space-y-2">
+                          <h4 className="text-xs font-bold text-slate-200">Rincian dan sumber data {assistantResult.type === 'transactions' || assistantResult.type === 'budget' ? `(${assistantResult.details.length}${assistantResult.totalCount > 100 ? ' dari ' + assistantResult.totalCount : ''})` : ''}</h4>
+                          {assistantResult.details.map((item, idx) => {
+                            const key = item.idKey || item.id || item.name || idx;
+                            const expanded = assistantExpandedSource === key;
+                            return <div key={key} className="rounded-xl border border-white/10 bg-slate-950/40 overflow-hidden">
+                              <button type="button" onClick={() => setAssistantExpandedSource(expanded ? null : key)} className="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 text-left hover:bg-white/[0.04]">
+                                <div className="min-w-0"><p className="text-xs font-bold text-white truncate">{item.id || item.name || 'Sumber rekening'} <span className="font-normal text-slate-400">· {item.date || item.type || ''}</span></p><p className="text-[11px] text-slate-400 truncate">{item.description || item.category || item.number || item.type || '-'}</p></div>
+                                <div className="flex items-center gap-2 shrink-0"><b className={`text-xs ${item.type === 'Pengeluaran' ? 'text-rose-300' : 'text-emerald-300'}`}>{formatIDR(item.amount ?? item.balance ?? 0)}</b><i data-lucide={expanded ? 'chevron-up' : 'chevron-down'} className="w-4 h-4 text-slate-400"></i></div>
+                              </button>
+                              {expanded && <div className="border-t border-white/10 p-3 text-[11px] text-slate-300 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {item.name ? <><p>Nama rekening: <b>{item.name}</b></p><p>Nomor: <b>{item.number}</b></p><p>Jenis: <b>{item.type}</b></p><p>Saldo: <b className="text-emerald-300">{formatIDR(item.balance)}</b></p></> : <><p>ID transaksi: <b className="text-emerald-300">{item.id}</b></p><p>Tanggal: <b>{item.date}</b></p><p>Jenis: <b>{item.type}</b></p><p>Kategori: <b>{item.category}</b></p><p>Kegiatan: <b>{item.activity}</b></p><p>Rekening: <b>{item.account}</b></p><p>Status: <b>{item.status}</b></p><p>Uraian: <b>{item.description}</b></p>{item.photo && <div className="sm:col-span-2"><p className="mb-2">Bukti transaksi:</p><a href={item.photo} target="_blank" rel="noreferrer" className="inline-block"><img src={item.photo} alt="Bukti transaksi" className="max-h-56 max-w-full rounded-lg border border-white/20 bg-white object-contain" /></a></div>}</>}
+                              </div>}
+                            </div>;
+                          })}
+                        </div>
+                      )}
+                      <div className="border-t border-white/10 pt-3"><p className="text-[10px] leading-relaxed text-slate-400">{assistantResult.note}</p><p className="text-[10px] text-slate-500 mt-1">Asisten menghitung dan menyaring data dengan aturan sistem; bukan AI generatif yang menebak nominal. Data tidak ditemukan atau gagal dibaca akan ditampilkan apa adanya.</p></div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {activeMenu === 'dashboard' && (
                 <div className="space-y-6">
