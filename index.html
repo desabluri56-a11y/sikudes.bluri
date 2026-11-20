@@ -91,6 +91,10 @@
         top: 0;
         width: 100%;
       }
+      /* Panel audit tetap tampil di layar, tetapi tidak ikut cetak. */
+      #financial-audit-panel {
+        display: none !important;
+      }
     }
   </style>
 </head>
@@ -395,6 +399,7 @@
       const [reportType, setReportType] = useState('bku');
       const [reportCategoryFilter, setReportCategoryFilter] = useState('Semua');
       const [reportActivityFilter, setReportActivityFilter] = useState('Semua');
+      const [auditActivityFilter, setAuditActivityFilter] = useState('Semua');
       // Filter tambahan khusus laporan pendapatan berdasarkan isi keterangan transaksi.
       const [reportDescriptionFilter, setReportDescriptionFilter] = useState('');
       // State Filter untuk Menu Penerimaan & Pengeluaran
@@ -896,22 +901,26 @@
         return Array.from(uniqueMap.values());
       }, [transactions]);
 
+      // Saldo kegiatan harus identik dengan activityBreakdown pada laporan.
+      // Gunakan reportTransactions (tahun terpilih + transaksi valid) dan aturan
+      // pengelompokan kegiatan yang sama; jangan mencampur nama kegiatan dengan kategori.
       const getActivityBalance = (activityName) => {
         if (!activityName || activityName === '-') return 0;
-        const matchedTrx = transactions.filter(t => 
-          (t.activity || '').toLowerCase() === activityName.toLowerCase() || 
-          (t.category || '').toLowerCase() === activityName.toLowerCase()
-        );
-        
-        const totalIn = matchedTrx
-          .filter(t => (t.type || '').toLowerCase().includes('pendapatan') || (t.type || '').toLowerCase() === 'in')
-          .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
-          
-        const totalOut = matchedTrx
-          .filter(t => (t.type || '').toLowerCase().includes('pengeluaran') || (t.type || '').toLowerCase().includes('belanja') || (t.type || '').toLowerCase() === 'out')
-          .reduce((acc, curr) => acc + Number(curr.amount || 0), 0);
-          
-        return totalIn - totalOut;
+        const targetActivity = String(activityName).trim().toLocaleLowerCase('id-ID');
+        const matchedTrx = reportTransactions.filter(t => {
+          const activity = t.activity && t.activity !== '-'
+            ? t.activity
+            : (t.category || 'Lainnya');
+          return String(activity).trim().toLocaleLowerCase('id-ID') === targetActivity;
+        });
+
+        return matchedTrx.reduce((balance, trx) => {
+          const amount = getSafeAmount(trx.amount);
+          const direction = getTransactionDirection(trx.type);
+          if (direction === 'in') return balance + amount;
+          if (direction === 'out') return balance - amount;
+          return balance;
+        }, 0);
       };
 
       // Satu sumber data untuk seluruh laporan: tahun terpilih, status valid, dan jenis transaksi dikenal.
@@ -1465,6 +1474,213 @@
         return Array.from(map.values()).sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
       }, [reportTransactions, budgetItems]);
 
+      // Audit kategori/kegiatan membaca seluruh transaksi pada tahun terpilih,
+      // termasuk transaksi yang belum lolos kriteria laporan agar anomali tidak tersembunyi.
+      const [auditCategoryFilter, setAuditCategoryFilter] = useState('Semua');
+
+      const financialReconciliationAudit = useMemo(() => {
+        const yearTransactions = transactions.filter(t => getTransactionYear(t.date) === String(selectedYear));
+        const categoryOptions = [...new Set(yearTransactions
+          .map(t => String(t.category || '').trim())
+          .filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id'));
+
+        const categoryScoped = yearTransactions.filter(t =>
+          auditCategoryFilter === 'Semua' ||
+          normalizeCategoryKey(t.category) === normalizeCategoryKey(auditCategoryFilter)
+        );
+        const activityNameOf = t => {
+          const raw = String(t.activity || '').trim();
+          return raw && raw !== '-' ? raw : (String(t.category || '').trim() || 'Kegiatan belum diisi');
+        };
+        const activityOptions = [...new Set(categoryScoped.map(activityNameOf))]
+          .sort((a, b) => a.localeCompare(b, 'id'));
+
+        const scopedTransactions = categoryScoped.filter(t =>
+          auditActivityFilter === 'Semua' ||
+          activityNameOf(t).toLocaleLowerCase('id-ID') === auditActivityFilter.toLocaleLowerCase('id-ID')
+        );
+
+        const duplicateGroups = new Map();
+        scopedTransactions.forEach(t => {
+          const key = [
+            String(t.date || '').trim(),
+            getSafeAmount(t.amount),
+            normalizeCategoryKey(t.category),
+            String(t.description || t.uraian || t.keterangan || '').trim().toLocaleLowerCase('id-ID'),
+            getTransactionDirection(t.type)
+          ].join('|');
+          if (!duplicateGroups.has(key)) duplicateGroups.set(key, []);
+          duplicateGroups.get(key).push(t);
+        });
+        const duplicateIds = new Set();
+        duplicateGroups.forEach(group => {
+          if (group.length > 1) group.forEach(t => duplicateIds.add(t.idKey || t.id));
+        });
+
+        const rows = [];
+        const categoryTotals = new Map();
+        const activityTotals = new Map();
+
+        scopedTransactions.forEach(t => {
+          const categoryName = String(t.category || '').trim();
+          const rawActivity = String(t.activity || '').trim();
+          const activityName = activityNameOf(t);
+          const direction = getTransactionDirection(t.type);
+          const amount = getSafeAmount(t.amount);
+          const status = String(t.status || '').trim().toLowerCase();
+          const issues = [];
+
+          if (!categoryName || categoryName === '-') issues.push('Kategori APBDes belum diisi');
+          if (!rawActivity || rawActivity === '-') issues.push('Kegiatan terkait belum diisi');
+          if (direction === 'unknown') issues.push('Jenis transaksi tidak dikenali');
+          if (!(amount > 0)) issues.push('Nominal kosong, nol, atau tidak valid');
+          if (status && !['disetujui', 'approved', 'approve', 'setuju', 'sudah disetujui'].includes(status)) {
+            issues.push(`Status belum disetujui (${t.status})`);
+          }
+          if (duplicateIds.has(t.idKey || t.id)) issues.push('Indikasi transaksi duplikat: tanggal, kategori, jenis, nominal, dan uraian sama');
+          if (direction === 'out' && !(t.photo || t.receipt || t.receiptUrl || t.evidence || t.buktiTransaksi)) {
+            issues.push('Bukti transaksi belum terlampir');
+          }
+
+          if (issues.length) {
+            rows.push({
+              date: t.date || '-',
+              id: t.id || t.idKey || t.key || '-',
+              description: t.description || t.uraian || t.keterangan || '-',
+              category: categoryName || '-',
+              activity: activityName || '-',
+              type: t.type || '-',
+              direction,
+              amount,
+              issues
+            });
+          }
+
+          const catKey = normalizeCategoryKey(categoryName || 'Kategori belum diisi');
+          if (!categoryTotals.has(catKey)) categoryTotals.set(catKey, {
+            name: categoryName || 'Kategori belum diisi', totalIn: 0, totalOut: 0, count: 0
+          });
+          const cat = categoryTotals.get(catKey);
+          if (direction === 'in') cat.totalIn += amount;
+          else if (direction === 'out') cat.totalOut += amount;
+          cat.count += 1;
+
+          const actKey = String(activityName).toLocaleLowerCase('id-ID');
+          if (!activityTotals.has(actKey)) activityTotals.set(actKey, {
+            name: activityName, totalIn: 0, totalOut: 0, count: 0
+          });
+          const act = activityTotals.get(actKey);
+          if (direction === 'in') act.totalIn += amount;
+          else if (direction === 'out') act.totalOut += amount;
+          act.count += 1;
+        });
+
+        const categoryComparisons = Array.from(categoryTotals.values())
+          .map(item => ({ ...item, categoryNet: item.totalIn - item.totalOut }))
+          .sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
+        const activitySummary = Array.from(activityTotals.values())
+          .map(item => ({ ...item, net: item.totalIn - item.totalOut }))
+          .sort((a, b) => (b.totalIn + b.totalOut) - (a.totalIn + a.totalOut));
+
+        return {
+          rows: sortTransactionsChronologically(rows),
+          categoryComparisons,
+          activitySummary,
+          categoryOptions,
+          activityOptions,
+          checkedTransactions: scopedTransactions.length,
+          issueCount: rows.length,
+          categoryCount: categoryTotals.size,
+          activityFilter: auditActivityFilter,
+          categoryFilter: auditCategoryFilter
+        };
+      }, [transactions, selectedYear, auditCategoryFilter, auditActivityFilter]);
+
+      const canViewFinancialAudit = !!currentUser && ['kaur_keuangan', 'sekdes'].includes(currentUser.role);
+
+      // Cetak khusus BKU: seluruh data sesuai filter (bukan hanya halaman aktif).
+      // Saldo berjalan dihitung hanya dari transaksi yang lolos filter kategori dan kegiatan.
+      const handlePrintBKU = () => {
+        const printWindow = window.open('', '_blank', 'width=1100,height=750');
+        if (!printWindow) {
+          showToast('⚠️ Pop-up diblokir oleh browser. Izinkan pop-up untuk mencetak BKU.');
+          return;
+        }
+
+        const esc = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[ch]));
+        const money = (value) => formatIDR(Number(value || 0));
+        // Terapkan seluruh filter terlebih dahulu. Saldo dimulai dari nol pada
+        // transaksi pertama yang benar-benar tampil sesuai filter BKU.
+        const sorted = sortTransactionsChronologically(reportTransactions || []);
+        const selectedRows = sorted.filter(t => {
+          const matchCategory = bkuCategoryFilter === 'Semua' || t.category === bkuCategoryFilter;
+          const activityName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
+          const matchActivity = bkuActivityFilter === 'Semua' || activityName === bkuActivityFilter;
+          return matchCategory && matchActivity;
+        });
+        let runningBalance = 0;
+        const filteredRows = selectedRows.map(t => {
+          const direction = getTransactionDirection(t.type);
+          const amount = getSafeAmount(t.amount);
+          runningBalance += direction === 'in' ? amount : (direction === 'out' ? -amount : 0);
+          return { ...t, direction, amount, currentBalance: runningBalance };
+        });
+        const totalIn = filteredRows.reduce((sum, t) => sum + (t.direction === 'in' ? t.amount : 0), 0);
+        const totalOut = filteredRows.reduce((sum, t) => sum + (t.direction === 'out' ? t.amount : 0), 0);
+        const rowsHtml = filteredRows.map((t, index) => `
+          <tr>
+            <td class="center">${index + 1}</td>
+            <td class="nowrap">${esc(t.date || '-')}</td>
+            <td>${esc(t.category || '-')}</td>
+            <td>${esc(t.activity || '-')}</td>
+            <td>${esc(t.description || '-')}</td>
+            <td class="num income">${t.direction === 'in' ? money(t.amount) : '-'}</td>
+            <td class="num expense">${t.direction === 'out' ? money(t.amount) : '-'}</td>
+            <td class="num balance">${money(t.currentBalance)}</td>
+          </tr>`).join('');
+
+        const villageName = villageProfile?.name || 'DESA';
+        const regency = villageProfile?.regency || 'LAMONGAN';
+        const district = villageProfile?.district || 'KECAMATAN';
+        const categoryLabel = bkuCategoryFilter === 'Semua' ? 'Semua Kategori' : bkuCategoryFilter;
+        const activityLabel = bkuActivityFilter === 'Semua' ? 'Semua Kegiatan' : bkuActivityFilter;
+        const generatedAt = new Date().toLocaleString('id-ID');
+        const html = `<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Buku Kas Umum - ${esc(villageName)} - ${esc(selectedYear)}</title>
+          <style>
+            *{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#111827;margin:0;padding:22px;font-size:10px}
+            .kop{text-align:center;border-bottom:3px double #111827;padding-bottom:12px;margin-bottom:16px}
+            .kop .line{font-weight:bold;text-transform:uppercase;letter-spacing:.5px;margin:3px 0}
+            .kop h1{font-size:17px;margin:7px 0 4px}.kop .subtitle{font-size:12px;font-weight:bold;color:#065f46}
+            h2{text-align:center;font-size:15px;margin:14px 0 5px}.sub{text-align:center;color:#475569;margin-bottom:14px}
+            .filters{display:flex;justify-content:space-between;gap:16px;border:1px solid #cbd5e1;padding:8px;margin-bottom:10px}
+            .summary{display:flex;gap:10px;margin:10px 0 14px}.summary div{flex:1;border:1px solid #cbd5e1;padding:8px}
+            .summary b{display:block;font-size:9px;color:#475569;margin-bottom:4px}.summary strong{font-size:11px}
+            table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #94a3b8;padding:6px 5px;vertical-align:top;overflow-wrap:anywhere}
+            th{background:#e2e8f0;text-align:center;font-weight:bold}td.center{text-align:center}td.nowrap{white-space:nowrap}
+            td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}td.income{color:#047857;font-weight:bold}td.expense{color:#be123c;font-weight:bold}td.balance{font-weight:bold}
+            tfoot td{font-weight:bold;background:#f1f5f9}.signature{display:flex;justify-content:flex-end;margin-top:35px}.signature div{text-align:center;width:220px;line-height:1.6}
+            .foot{margin-top:15px;font-size:9px;color:#64748b;display:flex;justify-content:space-between}
+            @page{size:A4 landscape;margin:12mm}@media print{body{padding:0}thead{display:table-header-group}tr{page-break-inside:avoid}}
+          </style></head><body>
+          <header class="kop"><div class="line">PEMERINTAH KABUPATEN ${esc(regency)}</div><div class="line">${esc(district)}</div><h1>PEMERINTAH ${esc(villageName)}</h1><div class="subtitle">BUKU KAS UMUM (BKU) DESA</div></header>
+          <h2>LAPORAN BUKU KAS UMUM</h2><div class="sub">Tahun Anggaran ${esc(selectedYear)} · Urut kronologis Januari s.d. Desember, tanggal 1 s.d. 31</div>
+          <div class="filters"><span><b>Filter Kategori:</b> ${esc(categoryLabel)}</span><span><b>Filter Kegiatan:</b> ${esc(activityLabel)}</span></div>
+          <div class="summary"><div><b>TOTAL PENERIMAAN (HASIL FILTER)</b><strong>${money(totalIn)}</strong></div><div><b>TOTAL PENGELUARAN (HASIL FILTER)</b><strong>${money(totalOut)}</strong></div><div><b>SELISIH PENERIMAAN - PENGELUARAN</b><strong>${money(totalIn-totalOut)}</strong></div><div><b>JUMLAH TRANSAKSI</b><strong>${filteredRows.length}</strong></div></div>
+          <table><thead><tr><th style="width:3%">No</th><th style="width:8%">Tanggal</th><th style="width:13%">Kategori</th><th style="width:14%">Kegiatan Terkait</th><th style="width:27%">Uraian / Keterangan</th><th style="width:11%">Penerimaan</th><th style="width:11%">Pengeluaran</th><th style="width:13%">Saldo Berjalan</th></tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="8" style="text-align:center;padding:18px">Tidak ada transaksi sesuai filter.</td></tr>'}</tbody>
+          </table>
+          <div class="signature"><div>${esc(villageName)}, ${new Date().toLocaleDateString('id-ID')}<br>Kepala Desa<br><br><br><b>( ........................................ )</b></div></div>
+          <div class="foot"><span>Dicetak: ${esc(generatedAt)}</span><span>Halaman <span class="pageNumber"></span></span></div>
+          <script>window.onload=function(){setTimeout(function(){window.print();},500)};<\/script></body></html>`;
+        printWindow.document.open();
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        showToast('🖨️ Pratinjau cetak BKU dibuka. Pilih “Simpan sebagai PDF” pada tujuan printer.');
+      };
+
       const handlePrintReport = () => {
         const printArea = document.getElementById('printable-report-area');
         if (!printArea) {
@@ -1478,11 +1694,17 @@
           return;
         }
 
+        // Salin hanya area laporan, lalu keluarkan panel audit dari salinan cetak.
+        // Tampilan audit asli tetap utuh di halaman aplikasi.
+        const printableReport = printArea.cloneNode(true);
+        const auditPanelForPrint = printableReport.querySelector('#financial-audit-panel');
+        if (auditPanelForPrint) auditPanelForPrint.remove();
+
         const escapePrintText = (value) => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
         const evidenceTransactions = (reportTransactions || []).filter(t => t.photo && String(t.date || '').startsWith(String(selectedYear)));
         const evidenceHtml = evidenceTransactions.length ? '<section class="evidence-appendix"><h1>LAMPIRAN BUKTI TRANSAKSI</h1><p>Tahun Anggaran ' + escapePrintText(selectedYear) + '</p>' + evidenceTransactions.map((t, i) => '<article class="evidence-item"><h3>' + (i+1) + '. ' + escapePrintText(t.id || 'Transaksi') + '</h3><p><b>Tanggal:</b> ' + escapePrintText(t.date) + ' &nbsp; <b>Jenis:</b> ' + escapePrintText(t.type) + '</p><p><b>Kategori:</b> ' + escapePrintText(t.category) + '</p><p><b>Uraian:</b> ' + escapePrintText(t.description) + '</p><img src="' + t.photo + '" alt="Bukti transaksi"></article>').join('') + '</section>' : '';
         const cleanHtml = '<!DOCTYPE html><html lang="id"><head><meta charset="UTF-8"><title>Cetak Laporan Keuangan Desa - T.A. ' + selectedYear + '</title><script src="https://cdn.tailwindcss.com"><\/script><style>body { background-color: #ffffff !important; color: #0f172a !important; font-family: sans-serif; padding: 2rem; } table { width: 100%; border-collapse: collapse; margin-top: 1rem; margin-bottom: 1rem; } th, td { border: 1px solid #cbd5e1 !important; padding: 8px 10px !important; font-size: 11px !important; } th { background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: bold; } .evidence-appendix{page-break-before:always;margin-top:30px}.evidence-item{page-break-inside:avoid;border:1px solid #cbd5e1;padding:14px;margin:14px 0}.evidence-item img{display:block;max-width:100%;max-height:520px;object-fit:contain;margin-top:10px} #printable-report-area td img{max-width:72px;max-height:58px;object-fit:contain;display:block;margin:auto} #printable-report-area td{vertical-align:middle}.evidence-appendix h1{font-size:20px;font-weight:bold}.evidence-item h3{font-weight:bold;font-size:14px} @media print { @page { size: A4; margin: 1cm; } }</style></head><body>' + 
-          printArea.innerHTML + evidenceHtml +
+          printableReport.innerHTML + evidenceHtml +
           '<script>window.onload = function() { setTimeout(() => { window.print(); }, 700); };<\/script></body></html>';
 
         printWindow.document.write(cleanHtml);
@@ -4045,9 +4267,18 @@
 
               {activeMenu === 'bku' && (
                 <div className="bg-white/[0.025] backdrop-blur-[40px] rounded-2xl p-6 border border-white/15 shadow-[0_8px_32px_0_rgba(0,0,0,0.37)] space-y-6">
-                  <div className="pb-4 border-b border-white/15">
-                    <h2 className="text-lg font-bold text-slate-100">Buku Kas Umum (BKU) Desa</h2>
-                    <p className="text-xs text-slate-400">Catatan kronologis dari bulan Januari hingga Desember (Tanggal 1 s.d. 31)</p>
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-white/15">
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-100">Buku Kas Umum (BKU) Desa</h2>
+                      <p className="text-xs text-slate-400">Catatan kronologis dari bulan Januari hingga Desember (Tanggal 1 s.d. 31)</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handlePrintBKU}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg border border-emerald-400/40 transition"
+                    >
+                      <i data-lucide="file-down" className="w-4 h-4"></i> Cetak / Simpan PDF
+                    </button>
                   </div>
 
                   {/* Filter Kategori & Kegiatan BKU */}
@@ -4097,21 +4328,20 @@
                       <tbody className="divide-y divide-white/10">
                         {(() => {
                           const allSorted = sortTransactionsChronologically(reportTransactions);
-                          let runningBalance = 0;
-                          
-                          const mappedTrx = allSorted.map((t) => {
-                            const typeStr = (t.type || '').toLowerCase();
-                            const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
-                            runningBalance += isInc ? Number(t.amount || 0) : -Number(t.amount || 0);
-                            return { ...t, isInc, currentBalance: runningBalance };
-                          });
-
-                          const filteredBku = mappedTrx.filter(t => {
+                          // Filter kategori dan kegiatan diterapkan sebelum saldo dihitung.
+                          const selectedBku = allSorted.filter(t => {
                             const matchCat = bkuCategoryFilter === 'Semua' || t.category === bkuCategoryFilter;
                             const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
                             const matchAct = bkuActivityFilter === 'Semua' || actName === bkuActivityFilter;
-
                             return matchCat && matchAct;
+                          });
+                          let runningBalance = 0;
+                          const filteredBku = selectedBku.map(t => {
+                            const direction = getTransactionDirection(t.type);
+                            const isInc = direction === 'in';
+                            const amount = getSafeAmount(t.amount);
+                            runningBalance += direction === 'in' ? amount : (direction === 'out' ? -amount : 0);
+                            return { ...t, isInc, currentBalance: runningBalance };
                           });
 
                           const totalPages = Math.ceil(filteredBku.length / itemsPerPage) || 1;
@@ -4154,19 +4384,11 @@
                   {/* Navigasi Pagination BKU */}
                   {(() => {
                     const allSorted = sortTransactionsChronologically(reportTransactions);
-                    let runningBal = 0;
-                    const mappedTrx = allSorted.map((t) => {
-                      const typeStr = (t.type || '').toLowerCase();
-                      const isInc = typeStr.includes('pendapatan') || typeStr === 'in' || typeStr.includes('masuk');
-                      runningBal += isInc ? Number(t.amount || 0) : -Number(t.amount || 0);
-                      return { ...t, isInc };
-                    });
-
-                    const filteredBku = mappedTrx.filter(t => {
+                    // Pagination memakai himpunan transaksi yang sama dengan tabel dan cetak.
+                    const filteredBku = allSorted.filter(t => {
                       const matchCat = bkuCategoryFilter === 'Semua' || t.category === bkuCategoryFilter;
                       const actName = t.activity && t.activity !== '-' ? t.activity : (t.category || 'Lainnya');
                       const matchAct = bkuActivityFilter === 'Semua' || actName === bkuActivityFilter;
-
                       return matchCat && matchAct;
                     });
 
@@ -4317,6 +4539,91 @@
                       </h4>
                       <p className="text-xs text-slate-600">Tahun Anggaran {selectedYear} (Urut Kronologis: Jan s.d. Des, Tgl 1 s.d. 31)</p>
                     </div>
+
+                    {canViewFinancialAudit && (
+                      <section id="financial-audit-panel" className={`rounded-xl border-2 ${financialReconciliationAudit.issueCount ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'} p-4 space-y-3 text-slate-900`}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <h5 className="text-sm font-black uppercase">Audit Keuangan: Telusuri Kategori, Kegiatan & Kejanggalan</h5>
+                            <p className="text-[11px] text-slate-600">Pilih kategori untuk melihat seluruh kegiatan di dalamnya, lalu telusuri transaksi dan indikator yang perlu diverifikasi pada tahun {selectedYear}. Audit hanya membaca data dan tidak mengubah transaksi.</p>
+                          </div>
+                          <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${financialReconciliationAudit.issueCount ? 'bg-amber-200 text-amber-900' : 'bg-emerald-100 text-emerald-800'}`}>
+                            {financialReconciliationAudit.issueCount ? `${financialReconciliationAudit.issueCount} TRANSAKSI PERLU DITINJAU` : 'PEMERIKSAAN SESUAI'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">1. Pilih Kategori APBDes</label>
+                            <select
+                              value={auditCategoryFilter}
+                              onChange={(e) => { setAuditCategoryFilter(e.target.value); setAuditActivityFilter('Semua'); setAuditPage(1); }}
+                              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800"
+                            >
+                              <option value="Semua">Semua Kategori</option>
+                              {financialReconciliationAudit.categoryOptions.map((name, i) => (
+                                <option key={`audit-category-${i}`} value={name}>{name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-700 mb-1">2. Pilih Jenis Kegiatan</label>
+                            <select
+                              value={auditActivityFilter}
+                              onChange={(e) => { setAuditActivityFilter(e.target.value); setAuditPage(1); }}
+                              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800"
+                            >
+                              <option value="Semua">Semua Kegiatan dalam kategori</option>
+                              {financialReconciliationAudit.activityOptions.map((name, i) => (
+                                <option key={`audit-activity-${i}`} value={name}>{name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <p className="md:col-span-2 text-[10px] text-slate-600">Filter kegiatan mengikuti kategori yang dipilih. Pilih satu kategori untuk mengetahui kegiatan apa saja yang memakai kategori tersebut, atau pilih satu kegiatan untuk memeriksa transaksi secara lebih rinci.</p>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+                          <div className="rounded-lg bg-white border border-slate-200 p-2"><div className="text-slate-500">Transaksi diperiksa</div><b>{financialReconciliationAudit.checkedTransactions}</b></div>
+                          <div className="rounded-lg bg-white border border-slate-200 p-2"><div className="text-slate-500">Kategori APBDes terdeteksi</div><b>{financialReconciliationAudit.categoryCount}</b></div>
+                          <div className="rounded-lg bg-white border border-slate-200 p-2"><div className="text-slate-500">Transaksi perlu diperiksa</div><b className={financialReconciliationAudit.issueCount ? 'text-rose-700' : 'text-emerald-700'}>{financialReconciliationAudit.issueCount}</b></div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <h6 className="text-xs font-black uppercase text-slate-700">Ringkasan transaksi berdasarkan kategori dalam kegiatan terpilih</h6>
+                          {financialReconciliationAudit.categoryComparisons.length ? (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left text-[10px] border-collapse bg-white">
+                                <thead><tr className="bg-amber-100"><th className="border border-amber-200 p-2">Kategori APBDes</th><th className="border border-amber-200 p-2 text-right">Penerimaan</th><th className="border border-amber-200 p-2 text-right">Pengeluaran</th><th className="border border-amber-200 p-2 text-right">Saldo Bersih</th><th className="border border-amber-200 p-2 text-right">Jumlah Transaksi</th></tr></thead>
+                                <tbody>{financialReconciliationAudit.categoryComparisons.map((item, i) => (
+                                  <tr key={`${item.name}-${i}`}>
+                                    <td className="border border-amber-100 p-2 font-semibold">{item.name}</td>
+                                    <td className="border border-amber-100 p-2 text-right whitespace-nowrap">{formatIDR(item.totalIn)}</td>
+                                    <td className="border border-amber-100 p-2 text-right whitespace-nowrap">{formatIDR(item.totalOut)}</td>
+                                    <td className="border border-amber-100 p-2 text-right whitespace-nowrap font-bold">{formatIDR(item.categoryNet)}</td>
+                                    <td className="border border-amber-100 p-2 text-right">{item.count}</td>
+                                  </tr>
+                                ))}</tbody>
+                              </table>
+                            </div>
+                          ) : <p className="text-xs text-emerald-800 font-semibold">Tidak ditemukan selisih pada kategori yang memiliki kegiatan dengan nama sama.</p>}
+                        </div>
+
+                        <div className="space-y-2">
+                          <h6 className="text-xs font-black uppercase text-slate-700">Daftar transaksi yang perlu diperiksa</h6>
+                          {financialReconciliationAudit.rows.length ? (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left text-[10px] border-collapse bg-white">
+                                <thead><tr className="bg-amber-100"><th className="border border-amber-200 p-2">Tanggal</th><th className="border border-amber-200 p-2">ID</th><th className="border border-amber-200 p-2">Uraian</th><th className="border border-amber-200 p-2">Kategori APBDes</th><th className="border border-amber-200 p-2">Kegiatan</th><th className="border border-amber-200 p-2">Jenis</th><th className="border border-amber-200 p-2 text-right">Nominal</th><th className="border border-amber-200 p-2">Temuan audit</th></tr></thead>
+                                <tbody>{financialReconciliationAudit.rows.map((t, i) => (
+                                  <tr key={`${t.id}-${i}`}>
+                                    <td className="border border-amber-100 p-2 whitespace-nowrap">{t.date}</td><td className="border border-amber-100 p-2">{t.id}</td><td className="border border-amber-100 p-2">{t.description}</td><td className="border border-amber-100 p-2">{t.category}</td><td className="border border-amber-100 p-2">{t.activity}</td><td className="border border-amber-100 p-2">{t.type}</td><td className="border border-amber-100 p-2 text-right whitespace-nowrap">{formatIDR(t.amount)}</td><td className="border border-amber-100 p-2 font-bold text-amber-800">{t.issues.join('; ')}</td>
+                                  </tr>
+                                ))}</tbody>
+                              </table>
+                            </div>
+                          ) : <p className="text-xs text-emerald-800 font-semibold">Tidak ditemukan indikator kejanggalan pada transaksi yang sedang difilter. Tetap cocokkan dengan dokumen dan bukti fisik.</p>}
+                        </div>
+                        <p className="text-[10px] text-slate-500">Hak akses: hanya Bendahara (Kaur Keuangan) dan Sekretaris Desa. Temuan merupakan indikator awal, bukan bukti penyimpangan. Periksa dokumen APBDes, kuitansi/foto bukti, tanggal, nominal, status persetujuan, dan transaksi sumber sebelum menyimpulkan atau melakukan koreksi.</p>
+                      </section>
+                    )}
 
                     {reportType === 'bku' && (
                       <div className="overflow-x-auto space-y-4">
